@@ -1,0 +1,1 @@
+"""ShopSlot operational application boundary."""

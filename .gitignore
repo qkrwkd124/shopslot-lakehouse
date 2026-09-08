@@ -1,0 +1,7 @@
+.env
+.DS_Store
+data/
+warehouse/
+checkpoints/
+__pycache__/
+*.py[cod]
