@@ -73,9 +73,9 @@ Live:       generator -> MySQL + outbox -> Debezium -> Redpanda
 
 - Docker Compose의 MySQL, Redpanda, Debezium, MinIO, Spark 기본 구성은 있다.
 - P0 원본 모델은 SQLAlchemy ORM과 Alembic 초기 revision(`20260908_0001`)으로 관리한다. Compose의 `migrate` 서비스가 Debezium과 generator보다 먼저 migration을 적용한다.
+- Python 의존성 범위는 `pyproject.toml`, 정확한 설치 버전과 해시는 `uv.lock`으로 관리한다. 공용 Dockerfile은 고정된 uv 바이너리와 `uv sync --locked --no-dev`를 사용한다.
 - P0 generator는 shops(3), customers(10), services(3)를 seed하고 bookings(10)와 outbox_events(10)를 기록한다. 예약과 outbox 행은 각각 같은 트랜잭션으로 commit한다.
 - 격리된 MySQL 8.4에서 Alembic migration 및 generator 기록을 검증했다: 3 shops, 10 customers, 3 services, 10 bookings, 10 outbox events.
-- 초기 파일은 staging area에 있으며, 아직 첫 커밋과 push는 하지 않았다.
 
 ## Change and incident record
 

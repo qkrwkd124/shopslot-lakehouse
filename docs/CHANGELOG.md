@@ -2,6 +2,23 @@
 
 ShopSlot의 구현·계약·운영 방식에 영향을 주는 변경을 날짜순으로 기록한다. 커밋 메시지의 대체물이 아니라, 왜 변경했는지와 검증 결과를 빠르게 파악하기 위한 문서다.
 
+## 2026-09-08 — uv 기반 재현 가능한 Python 이미지 빌드
+
+### Added
+
+- `uv.lock`을 생성해 Python 패키지의 정확한 버전과 배포 파일 해시를 고정했다.
+- 로컬 가상환경과 불필요한 실행 데이터를 이미지에서 제외하는 `.dockerignore`를 추가했다.
+
+### Changed
+
+- 공용 Dockerfile의 `pip install .`을 고정된 uv 바이너리와 `uv sync --locked --no-dev` 기반 2단계 의존성 설치로 교체했다.
+- 애플리케이션 소스보다 의존성 파일을 먼저 복사해 Docker 레이어 캐시를 재사용하도록 구성했다.
+
+### Verified
+
+- `uv lock --check`로 `pyproject.toml`과 `uv.lock`의 일치를 확인했다.
+- Compose의 `migrate`와 선택적 `api` 이미지를 새 Dockerfile로 빌드했다.
+
 ## 2026-09-08 — ORM/Alembic 기반 P0 원본 스키마
 
 ### Added

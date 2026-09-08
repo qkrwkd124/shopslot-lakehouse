@@ -16,6 +16,7 @@ MinIO + Spark are provisioned now; Iceberg Bronze ingestion starts in P1.
 
 - Docker Desktop with Compose v2
 - `curl` (macOS 기본 제공)
+- `uv` (Python 의존성을 변경하고 `uv.lock`을 갱신할 때만 필요)
 
 ## P0 quick start
 
@@ -37,6 +38,8 @@ make connector
 make generate-p0
 make verify-p0
 ```
+
+Python 의존성 범위는 `pyproject.toml`, 설치할 정확한 버전과 해시는 `uv.lock`에서 관리한다. 의존성을 변경한 뒤에는 `uv lock`을 실행하고 두 파일을 함께 커밋한다. Docker 이미지 빌드는 `uv sync --locked --no-dev`를 사용하므로 두 파일이 불일치하면 실패한다.
 
 The generator uses a fixed UUID namespace and `Asia/Seoul` timestamps inside the event payload. Each source booking `INSERT` and its corresponding `outbox_events` `INSERT` commit together; a failure rolls both back. Kafka record timestamps remain ingestion-time so a fixed-seed historical timestamp cannot be rejected by a broker timestamp policy.
 
@@ -86,6 +89,8 @@ app/            optional FastAPI boundary, ORM models, outbox service
 alembic/        versioned operational-schema migrations
 generator/      deterministic transactional event producer
 docker-compose.yml
+pyproject.toml   Python 프로젝트와 의존성 범위
+uv.lock          재현 가능한 Python 의존성 잠금
 mysql/init/     MySQL and Debezium account bootstrap only
 spark/          reserved for P1 Bronze streaming configuration/jobs
 scripts/        repeatable verification commands
