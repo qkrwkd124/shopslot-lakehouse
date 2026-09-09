@@ -8,6 +8,7 @@ from app.db.models.operational import (
     PaymentTransaction,
     Service,
     Shop,
+    Staff,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "PaymentTransaction",
     "Service",
     "Shop",
+    "Staff",
 ]
