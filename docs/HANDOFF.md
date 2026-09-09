@@ -12,8 +12,10 @@ ShopSlot은 일반 상품 쇼핑몰이 아니라, 시간 슬롯을 예약하고 
 
 ```text
 shops ─┬─ services
+       ├─ staffs
        └─ bookings ─┬─ customers
-                     └─ services (예약당 1개)
+                     ├─ services (예약당 1개)
+                     └─ staffs (담당 직원 1명)
 
 bookings ── payments ── payment_transactions
 ```
@@ -21,10 +23,13 @@ bookings ── payments ── payment_transactions
 - `shops`: 다점포 운영 주체. 상위 10개 매장이 이벤트 약 70%를 차지하는 Zipf skew를 만든다.
 - `customers`: ID와 세그먼트만 사용한다. 이름·전화·주소 등 PII는 없다.
 - `services`: 매장별 서비스 카탈로그. 가격, 소요 시간, 활성 상태를 가진다.
+- `staffs`: 매장별 직원. 예약의 담당 직원을 FK로 연결한다.
 - `bookings`: 예약 하나에 서비스 하나만 연결한다. 예약 당시 가격(`booked_price_krw`)을 보존한다.
 - `payments`: 예약당 0~1개. 청구 금액, 현재 수납·환불 상태를 요약한다.
 - `payment_transactions`: 실제 수납 또는 환불의 append-only 거래. 부분·전액 환불을 표현한다.
 - `outbox_events`: 원본 변경과 같은 DB 트랜잭션에서 기록하는 명시적 비즈니스 이벤트다.
+
+엔터티와 `payment_transactions`는 공통 `BaseModel`의 `BIGINT UNSIGNED AUTO_INCREMENT` PK `id`와 생성·수정 시각을 사용하고, FK도 같은 타입으로 맞춘다. FK 이름은 `shop_id`, `booking_id`처럼 관계 대상을 남긴다. outbox는 논리 이벤트 식별자인 UUID `event_id`를 PK로 유지한다. 이벤트 payload의 `payment_transaction_id`는 숫자형 거래 PK 값을 전달하는 계약 필드다. 향후 순수 연관 테이블은 별도 `id` 없이 FK 조합을 복합 PK로 사용한다.
 
 초기 범위에는 `booking_items`, `payment_items`, 상품 판매, 복수 결제수단 분할, 선불권/패스가 없다. 이들은 다중 서비스 예약이나 서비스 단위 환불이 필요해질 때 확장한다.
 
@@ -71,24 +76,26 @@ Live:       generator -> MySQL + outbox -> Debezium -> Redpanda
 
 ## Current repository state
 
-- Docker Compose의 MySQL, Redpanda, Debezium, MinIO, Spark 기본 구성은 있다.
-- P0 원본 모델은 SQLAlchemy ORM과 Alembic 초기 revision(`20260908_0001`)으로 관리한다. Compose의 `migrate` 서비스가 Debezium과 generator보다 먼저 migration을 적용한다.
+- Docker Compose의 MySQL, Redpanda, Redpanda Console, Debezium, MinIO, Spark 기본 구성은 있다. Console은 `http://localhost:8084`에서 Kafka 토픽과 메시지를 조회한다.
+- 아직 배포 전인 P0 migration은 최종 스키마를 만드는 단일 초기 revision `20260908_0001`로 squash했다. `staffs`, `bookings.staff_id` FK와 `payment_transactions.id`가 모두 포함된다. Compose의 `migrate` 서비스가 Debezium과 generator보다 먼저 migration을 적용한다.
 - Python 의존성 범위는 `pyproject.toml`, 정확한 설치 버전과 해시는 `uv.lock`으로 관리한다. 공용 Dockerfile은 고정된 uv 바이너리와 `uv sync --locked --no-dev`를 사용한다.
-- P0 generator는 shops(3), customers(10), services(3)를 seed하고 bookings(10)와 outbox_events(10)를 기록한다. 예약과 outbox 행은 각각 같은 트랜잭션으로 commit한다.
-- 격리된 MySQL 8.4에서 Alembic migration 및 generator 기록을 검증했다: 3 shops, 10 customers, 3 services, 10 bookings, 10 outbox events.
+- P0 generator는 shops(3), customers(10), services(3), bookings(10), payments(7), payment_transactions(9)를 만들고 lifecycle outbox 이벤트 29건을 기록한다. 각 상태 변경·결제·환불과 대응 outbox 행은 같은 트랜잭션으로 commit한다.
+- `make smoke`로 MySQL 상태 정합성과 Kafka 이벤트 29건을 검증했다. 예약 최종 상태는 checked-in 7건, cancelled 1건, no-show 1건, scheduled 1건이며 결제에는 부분 환불과 전액 환불이 각각 1건 있다.
+- Debezium connector는 outbox JSON payload를 schema wrapper 없는 plain JSON으로 `booking.events.v1`에 발행한다.
 
 ## Change and incident record
 
 - 기능·스키마·이벤트 계약·운영 명령 변경은 [CHANGELOG.md](CHANGELOG.md)에 즉시 기록한다.
 - 구현·검증 중 발견한 장애와 해결은 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)에 증상·원인·해결·검증 순으로 기록한다.
+- 설계 선택, 구현 근거, 현재 한계와 면접 답변은 [PORTFOLIO_QA.md](PORTFOLIO_QA.md)에 구현 진행과 함께 갱신한다.
 - 포트폴리오 범위·아키텍처·디렉터리 구조가 바뀌면 저장소 변경과 같은 작업에서 `PORTFOLIO_DESIGN_CDC_LAKEHOUSE.md`도 갱신한다.
 
 ## Next task
 
-1. P0 generator에 `payment_completed`와 `payment_refunded` 시나리오를 추가해 payments/payment_transactions와 타입별 outbox 계약을 검증한다.
-2. Debezium outbox payload를 이벤트 타입별 계약에 맞춘다.
-3. `make smoke`로 새 모델의 MySQL outbox 10건과 Kafka 이벤트 10건을 검증한다.
-4. FastAPI scenario API가 필요해지면 `app/api/`에 예약 상태 전이 endpoint를 추가한다. migration은 새 Alembic revision으로만 적용한다.
+1. Spark Structured Streaming이 `booking.events.v1`을 읽어 Kafka metadata와 원문 payload를 Iceberg Bronze에 append하도록 구현한다.
+2. checkpoint를 적용하고 Spark kill/restart 후 이어 읽기를 검증한다.
+3. MySQL outbox, Kafka, Bronze 사이의 `event_id` reconciliation을 추가한다.
+4. 지속적인 신규 이벤트를 위한 `produce_live.py`를 추가한다. FastAPI scenario API는 필요할 때만 확장한다.
 
 ## Commands
 
@@ -98,6 +105,8 @@ make smoke
 make api    # 선택적인 FastAPI scenario API
 make down
 ```
+
+기본 `make up`에 Redpanda Console이 포함되며 브라우저에서 `http://localhost:8084`로 접속한다.
 
 `make reset`은 ShopSlot Docker 볼륨만 삭제한다.
 

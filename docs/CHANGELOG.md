@@ -2,6 +2,86 @@
 
 ShopSlot의 구현·계약·운영 방식에 영향을 주는 변경을 날짜순으로 기록한다. 커밋 메시지의 대체물이 아니라, 왜 변경했는지와 검증 결과를 빠르게 파악하기 위한 문서다.
 
+## 2026-09-08 — 직원 엔터티와 예약 FK
+
+### Added
+
+- 매장 소속 `staffs` 엔터티와 ORM 관계를 추가했다.
+- 최종 초기 migration에 `staffs`와 `bookings.staff_id`의 `BIGINT UNSIGNED` FK를 추가했다.
+- generator가 매장별 직원 2명을 seed하고 숫자형 `staff_id`를 이벤트 payload에 기록하도록 변경했다.
+
+### Verified
+
+- 기존 예약 10건을 보존한 채 `0004`를 적용했다.
+- 직원 FK orphan과 예약-직원 매장 불일치가 모두 0임을 확인했다.
+
+## 2026-09-08 — BIGINT 엔터티 식별자와 공통 BaseModel
+
+### Changed
+
+- 엔터티 5개의 PK를 `BIGINT UNSIGNED AUTO_INCREMENT`로, 이를 참조하는 FK 6개를 `BIGINT UNSIGNED`로 변경했다.
+- `BaseModel` 추상 모델에 `id`, `created_at`, `updated_at`을 모으고 엔터티 모델이 이를 상속하도록 정리했다.
+- P0 generator의 엔터티·payload 식별자를 정수형으로 맞췄다. UUID 기반 `event_id`만 논리 이벤트 식별자로 유지했다.
+- 배포 전 migration을 최종 스키마를 생성하는 초기 revision `20260908_0001`로 squash했다.
+
+### Verified
+
+- 기존 P0 데이터를 삭제하지 않고 `0002 → 0003` migration을 적용했다.
+- 엔터티 PK 5개가 unsigned bigint auto-increment이고 관련 FK 6개가 unsigned bigint이며, FK orphan이 없음을 확인했다.
+
+## 2026-09-08 — Redpanda Console과 엔터티 PK 규칙
+
+### Added
+
+- Compose 기본 스택에 Redpanda Console `v3.11.0`을 추가하고 호스트 `8084` 포트로 공개했다.
+- 초기 revision의 PK/FK 정의를 최종 명명 규칙에 맞췄다.
+- P0 검증에 엔터티·로그 테이블의 PK 메타데이터 검사를 추가했다.
+
+### Changed
+
+- `shops`, `customers`, `services`, `bookings`, `payments`의 PK 컬럼을 `id`로 통일하고 모든 참조 FK를 새 컬럼으로 연결했다.
+- FK 컬럼과 이벤트 payload는 문맥이 필요한 `shop_id`, `booking_id`, `payment_id` 이름을 유지했다.
+- `payment_transactions`도 공통 BIGINT `id` PK를 사용하고, `outbox_events`만 UUID `event_id` PK를 유지한다. 향후 순수 연관 테이블은 별도 `id` 없이 FK 조합 복합 PK를 사용한다.
+- generator SQL과 결제 reconciliation 검증을 새 엔터티 PK 규칙에 맞췄다.
+
+### Verified
+
+- 기존 데이터가 있는 DB에서 `0001 → 0002 → 0001 → 0002` upgrade/downgrade를 수행했고 예약 10건, 결제 7건, 거래 9건, 이벤트 29건이 유지됨을 확인했다.
+- 별도 임시 빈 DB에 `upgrade head`와 P0 generator를 실행해 당시 PK 구조와 동일한 데이터 건수를 확인한 후 임시 DB만 삭제했다.
+- 기본 DB의 `make verify-p0`가 통과했다.
+- `http://localhost:8084`에서 Console UI가 응답하고 `booking.events.v1` 토픽을 조회함을 확인했다.
+
+## 2026-09-08 — 결정론적 예약·결제·환불 lifecycle 데이터
+
+### Added
+
+- P0 generator에 일정 변경, 취소, 체크인, 노쇼, 결제 완료, 부분 환불과 전액 환불 시나리오를 추가했다.
+- 결제 summary와 append-only 거래 합계, 이벤트별 payload 필수 필드, MySQL 최종 상태와 Kafka 이벤트 유형별 건수를 검증한다.
+
+### Changed
+
+- 고정 P0 데이터셋을 예약 생성 이벤트 10건에서 예약 10건, 결제 7건, 결제 거래 9건, lifecycle 이벤트 29건으로 확장했다.
+- Debezium JSON converter의 `schemas.enable=false`를 worker와 connector에 명시해 Kafka value를 schema wrapper 없는 plain JSON으로 고정했다.
+- Kafka 검증은 payload 전체 문자열이 아니라 정확한 `event_type` 필드를 집계한다.
+
+### Verified
+
+- `make smoke` 전체 실행이 성공했다.
+- MySQL 예약 최종 상태가 checked-in 7건, cancelled 1건, no-show 1건, scheduled 1건임을 확인했다.
+- 결제 최종 상태가 paid 5건, partially-refunded 1건, refunded 1건이고 거래 합계와 summary가 일치함을 확인했다.
+- `booking.events.v1`에서 7종의 plain JSON 이벤트 총 29건을 확인했다.
+
+## 2026-09-08 — 구현 근거 중심 포트폴리오 Q&A
+
+### Added
+
+- `docs/PORTFOLIO_QA.md`에 프로젝트 요약, outbox와 CDC의 역할, 전달 보장, partition key, Bronze, watermark, Alembic, 동기 DB 선택과 장애 복구 질문을 정리했다.
+- 답변마다 현재 구현, 향후 계획, 의도적으로 남은 한계를 구분해 아직 검증하지 않은 내용을 성과처럼 설명하지 않도록 했다.
+
+### Changed
+
+- README와 HANDOFF에서 구현 변경과 함께 면접 Q&A도 지속적으로 갱신하도록 문서 운영 규칙을 확장했다.
+
 ## 2026-09-08 — uv 기반 재현 가능한 Python 이미지 빌드
 
 ### Added

@@ -2,6 +2,63 @@
 
 재현 가능한 증상, 근본 원인, 해결 방법, 검증 결과를 기록한다. 같은 문제를 다시 만났을 때 임시 우회 대신 안전한 해결책을 선택하는 기준이다.
 
+## 엔터티 PK 변경 후 검증 SQL에서 `Unknown column 'p.payment_id'`
+
+### 증상
+
+엔터티 PK를 `id`로 변경한 뒤 `make verify-p0`의 결제 reconciliation에서 `p.payment_id` 컬럼을 찾을 수 없다는 오류가 발생했다.
+
+### 원인
+
+ORM, migration과 generator는 `payments.id`로 변경했지만 검증 스크립트의 상관 서브쿼리 한 곳이 이전 PK 이름을 참조했다. 스키마 변경 시 쓰기 경로뿐 아니라 운영·검증 쿼리도 함께 바뀌어야 한다.
+
+### 해결
+
+거래 합계 조건을 `pt.payment_id = p.id`로 변경했다. 아울러 `information_schema`를 이용해 엔터티 5개는 `id`, 로그 2개는 의미가 있는 식별자를 PK로 쓰는지 검증하도록 계약 검사를 추가했다.
+
+### 검증
+
+기존 데이터에서 migration downgrade/upgrade 후 `make verify-p0`가 통과했고, 빈 임시 DB에서도 migration과 generator 전체 실행이 성공했다.
+
+## MySQL 재생성 직후 검증에서 로컬 소켓 접속 실패
+
+### 증상
+
+`docker compose up -d mysql && make verify-p0`를 한 번에 실행했을 때 `Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock'` 오류가 발생했다.
+
+### 원인
+
+Compose의 `up -d`는 컨테이너 프로세스 시작까지만 기다린다. 뒤따른 검증이 MySQL healthcheck가 `healthy`가 되기 전에 실행돼 서버 소켓 준비와 경합했다.
+
+### 해결
+
+MySQL을 직접 재생성한 뒤에는 `docker compose ps mysql`에서 `healthy`를 확인하고 검증을 실행한다. 정상 실행 경로에서는 `migrate`와 generator의 `depends_on.condition: service_healthy`를 사용한다.
+
+### 검증
+
+MySQL이 `healthy`가 된 뒤 동일한 `make verify-p0`를 재실행해 성공했다. 데이터 손상이나 인증 문제는 없었다.
+
+## Kafka 이벤트 유형이 두 배로 집계되고 JSON에 schema wrapper가 포함됨
+
+### 증상
+
+P0 검증에서 실제 `checked_in` 이벤트는 7건인데 문자열 집계 결과가 14건으로 나왔다. Kafka value도 의도한 payload 객체가 아니라 `schema`와 `payload`로 감싼 JSON이었다.
+
+### 원인
+
+- 검증기가 `checked_in` 문자열 전체를 세어 한 이벤트 안의 `event_type`과 `status`를 모두 집계했다.
+- Compose의 `VALUE_CONVERTER_SCHEMAS_ENABLE` 환경변수는 Debezium worker 설정 파일에 전달되지 않았다. 시작 로그에도 해당 property가 없어서 JsonConverter 기본 schema wrapper가 유지됐다.
+
+### 해결
+
+- Kafka 검증 패턴을 정확한 `\"event_type\":\"checked_in\"` key-value로 제한했다.
+- worker에는 `CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false`, outbox connector에는 `value.converter.schemas.enable=false`를 명시했다.
+- 기존 토픽 레코드 형식은 바뀌지 않으므로 재현 가능한 P0 볼륨을 초기화하고 이벤트를 다시 생성했다.
+
+### 검증
+
+`make smoke`로 29건을 다시 생성한 뒤 7개 이벤트 유형의 기대 건수가 모두 일치했다. Kafka value가 schema wrapper 없는 plain JSON payload임도 직접 확인했다.
+
 ## Alembic import 시 `TypeError: Integer() takes no arguments`
 
 ### 증상

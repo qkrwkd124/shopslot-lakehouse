@@ -1,4 +1,3 @@
-# shopslot-lakehouse
 # ShopSlot Lakehouse
 
 가상의 다점포 예약 플랫폼을 위한 CDC 기반 Lakehouse 포트폴리오다. 실제 고객·회사 데이터는 사용하지 않는다.
@@ -25,9 +24,13 @@ cp .env.example .env
 make smoke
 ```
 
-`make smoke` resets local volumes, starts the Compose stack, upserts the Debezium connector, creates exactly ten deterministic source/outbox records, then asserts ten `booking_created` records on Kafka.
+`make smoke`는 로컬 볼륨을 초기화하고 Compose stack과 Debezium connector를 기동한 뒤, 예약 10건의 lifecycle 데이터를 생성해 MySQL과 Kafka의 상태·이벤트 계약을 검증한다.
+
+고정 P0 데이터셋은 예약 10건, 결제 7건, 결제 거래 9건과 총 29개의 outbox/Kafka 이벤트로 구성한다. 이벤트 분포는 `booking_created` 10건, `booking_rescheduled` 1건, `booking_cancelled` 1건, `checked_in` 7건, `no_show_marked` 1건, `payment_completed` 7건, `payment_refunded` 2건이다. 환불은 20,000원 부분 환불과 55,000원 전액 환불을 각각 한 건 포함한다.
 
 새 MySQL 볼륨에서는 Compose의 `migrate` 서비스가 `alembic upgrade head`를 실행해 P0 원본 테이블을 생성한다. `mysql/init/001_bootstrap.sql`은 Debezium 복제 계정만 만든다. 예전 SQL 초기화로 만든 로컬 볼륨은 `make reset` 후 다시 시작해야 한다.
+
+엔터티와 결제 거래 테이블(`shops`, `customers`, `services`, `staffs`, `bookings`, `payments`, `payment_transactions`)은 공통 `BaseModel`의 `BIGINT UNSIGNED AUTO_INCREMENT` PK `id`와 생성·수정 시각을 사용한다. 직원은 매장에 소속되고 `bookings.staff_id`로 예약과 연결한다. FK는 같은 `BIGINT UNSIGNED` 타입으로 맞추고 `shop_id`, `booking_id`처럼 대상 이름을 유지한다. outbox는 논리 이벤트 식별자인 UUID `event_id`를 PK로 사용하며, 향후 순수 연관 테이블은 별도 `id` 없이 FK 조합을 복합 PK로 사용한다.
 
 For iterative work:
 
@@ -41,7 +44,7 @@ make verify-p0
 
 Python 의존성 범위는 `pyproject.toml`, 설치할 정확한 버전과 해시는 `uv.lock`에서 관리한다. 의존성을 변경한 뒤에는 `uv lock`을 실행하고 두 파일을 함께 커밋한다. Docker 이미지 빌드는 `uv sync --locked --no-dev`를 사용하므로 두 파일이 불일치하면 실패한다.
 
-The generator uses a fixed UUID namespace and `Asia/Seoul` timestamps inside the event payload. Each source booking `INSERT` and its corresponding `outbox_events` `INSERT` commit together; a failure rolls both back. Kafka record timestamps remain ingestion-time so a fixed-seed historical timestamp cannot be rejected by a broker timestamp policy.
+The generator uses a fixed UUID namespace and `Asia/Seoul` timestamps inside the event payload. Each booking transition, payment transaction, or refund and its corresponding `outbox_events` row commit together; a failure rolls the whole business transaction back. Kafka record timestamps remain ingestion-time so a fixed-seed historical timestamp cannot be rejected by a broker timestamp policy.
 
 ## Local endpoints
 
@@ -49,6 +52,7 @@ The generator uses a fixed UUID namespace and `Asia/Seoul` timestamps inside the
 | --- | --- |
 | MySQL | `localhost:3306` |
 | Redpanda Kafka API | `localhost:19092` |
+| Redpanda Console | `http://localhost:8084` |
 | Debezium Connect REST | `http://localhost:8083` |
 | MinIO API / Console | `http://localhost:9000` / `http://localhost:9001` |
 | Spark master UI | `http://localhost:8080` |
@@ -100,5 +104,6 @@ scripts/        repeatable verification commands
 
 - [Change log](docs/CHANGELOG.md): 구현·계약·운영 방식의 변경과 검증 결과
 - [Troubleshooting](docs/TROUBLESHOOTING.md): 재현 조건, 원인, 해결, 검증을 포함한 문제 해결 기록
+- [Portfolio interview Q&A](docs/PORTFOLIO_QA.md): 현재 구현 근거, 설계 트레이드오프, 남은 한계를 설명하는 면접 연습 문서
 
 스키마·이벤트 계약·아키텍처 경계가 변경되면 같은 변경에서 이 문서들과 포트폴리오 설계서를 함께 갱신한다.
