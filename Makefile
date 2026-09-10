@@ -1,8 +1,16 @@
 COMPOSE := docker compose
+.DEFAULT_GOAL := up
 
 .PHONY: up down reset migrate connector generate-p0 verify-p0 smoke logs ps api
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
+.PHONY: silver-events verify-silver-events
+
+silver-events:
+	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_booking_events.py
+
+verify-silver-events:
+	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_booking_events.py --self-test
 
 bronze-once:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/bronze_stream.py --available-now
