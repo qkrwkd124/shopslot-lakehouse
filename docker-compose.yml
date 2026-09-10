@@ -155,19 +155,58 @@ services:
           -H 'Content-Type: application/json' \
           --data @/config/outbox-router.json
 
-  spark:
-    image: apache/spark:3.5.6
+  spark: &spark-runtime
+    build:
+      context: ./spark
     depends_on:
       minio-init:
         condition: service_completed_successfully
+      iceberg-catalog-db:
+        condition: service_healthy
     environment:
       SPARK_NO_DAEMONIZE: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      ICEBERG_JDBC_USER: iceberg
+      ICEBERG_JDBC_PASSWORD: ${ICEBERG_CATALOG_PASSWORD:-iceberg-local}
     ports:
       - "4040:4040"
-      - "8080:8080"
     volumes:
       - ./spark:/opt/spark/work-dir/spark:ro
+      - spark-checkpoints:/opt/spark/checkpoints
     command: ["/bin/bash", "-lc", "tail -f /dev/null"]
+
+  bronze:
+    <<: *spark-runtime
+    profiles: ["streaming"]
+    ports: []
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      iceberg-catalog-db:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    command: ["python3", "/opt/spark/work-dir/spark/run.py", "submit", "/opt/spark/work-dir/spark/jobs/bronze_stream.py"]
+
+  iceberg-catalog-db:
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: iceberg
+      POSTGRES_USER: iceberg
+      POSTGRES_PASSWORD: ${ICEBERG_CATALOG_PASSWORD:-iceberg-local}
+    volumes:
+      - iceberg-catalog-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d iceberg"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   generator:
     build:
@@ -203,3 +242,5 @@ volumes:
   mysql-data:
   redpanda-data:
   minio-data:
+  iceberg-catalog-data:
+  spark-checkpoints:
