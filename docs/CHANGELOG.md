@@ -1,5 +1,20 @@
 # Change log
 
+## 2026-09-10 — 로컬 관찰용 접속 포트
+
+- 사용자가 추가한 Bronze Spark UI `4041:4040`, Catalog PostgreSQL `5432:5432` 매핑을 기록하고 README 접속 정보를 맞췄다.
+- 포트 매핑을 임의로 바꾸지 않았다. 현재는 loopback 한정이 아니므로 로컬 학습 환경의 접근 통제에 주의한다.
+
+## 2026-09-10 — 첫 Silver SQL 학습 모델
+
+- `lakehouse.silver.booking_events_clean` 하나를 만드는 배치를 추가했다. 새 컨테이너/dbt/checkpoint는 추가하지 않고 기존 Spark에서 SQL을 실행한다.
+- JSON 파싱·타입 변환·기본 schema v1 검증과 event_id 중복 제거를 두 SQL 파일로 분리했다. 유효한 동일 event_id의 payload 충돌은 쓰기 전에 실패시킨다. 제외 사유를 집계하고 원문은 Bronze에 유지한다.
+- Bronze snapshot 고정 후 파생 Silver만 원자적으로 전체 교체한다. 빈 입력/유효 결과 0건이면 기존 결과를 보존한다. 대량 증분 처리·영구 DQ·current-state 테이블은 후속 학습 범위다.
+- `make silver-events`, `make verify-silver-events`를 추가했다. 후자는 테스트 후 테이블도 재작성한다. 기본 make 목표를 up으로 명시해 새 target 추가로 인한 의도치 않은 Silver 실행을 막았다.
+- 작은 메모리 fixture에서 JSON·타입 오류, 필수값 누락, v2 미지원, 결제 필드 누락, 중복 대표행 선택, payload 충돌 거부를 검증했다. 최초 적재는 Bronze 29건 → Silver 29건, 제외 0건이며 계산 결과와 저장 결과를 양방향 비교했다.
+- `docs/SILVER_STUDY.md`와 README·HANDOFF·Q&A·외부 설계서를 최신화했다. 사용자의 기존 Compose UI 포트 변경은 보존했다.
+- 동일 Bronze snapshot으로 `make silver-events`를 재실행해 Silver 29건 유지와 계산/저장 결과 일치를 다시 확인했다. 새 snapshot으로 교체되지만 행이 append되어 두 배로 늘어나지 않았다.
+
 ## 2026-09-10 — Spark 학습 노트
 
 - `docs/SPARK_STUDY.md`에 PySpark 역할, local[2]/다중 노드, Bronze DDL·source·writer 옵션, trigger와 실행 시작/대기, MinIO 파일 쓰기와 Iceberg commit 시점을 정리했다.

@@ -57,6 +57,8 @@ The generator uses a fixed UUID namespace and `Asia/Seoul` timestamps inside the
 | Debezium Connect REST | `http://localhost:8083` |
 | MinIO API / Console | `http://localhost:9000` / `http://localhost:9001` |
 | Spark application UI (실행 중에만) | `http://localhost:4040` |
+| Bronze application UI (실행 중에만) | `http://localhost:4041` |
+| Iceberg Catalog PostgreSQL | `localhost:5432` |
 
 ## Iceberg connection quick start
 
@@ -83,7 +85,7 @@ SELECT file_path, record_count FROM lakehouse.demo.connection_check.files;
 
 실행 조합은 Spark 3.5.6 / Scala 2.12 / Java 17 / Iceberg 1.11.0 / PostgreSQL JDBC 42.7.7 / PostgreSQL 17.6이다. Java JAR는 `spark/Dockerfile` 빌드 시 버전을 고정해 설치하며 `uv.lock`과 별개다. Spark는 `local[2]`로 동작하며 별도의 master/worker 클러스터는 없다.
 
-Catalog 접속 비밀번호는 `ICEBERG_CATALOG_PASSWORD`(로컬 기본값 `iceberg-local`)이고, MinIO 자격 증명은 AWS SDK 환경변수로 전달한다. Catalog PostgreSQL은 호스트 포트를 공개하지 않는다. 데이터 파일은 `minio-data`, catalog는 `iceberg-catalog-data` 볼륨에 유지된다. 둘을 함께 보존해야 테이블을 계속 조회할 수 있다. `make down`은 보존하고, `make reset`은 두 볼륨을 포함해 기존 로컬 데이터 전체를 삭제한다. 이 자격 증명·단일 노드 구성은 로컬 학습용이다.
+Catalog 접속 비밀번호는 `ICEBERG_CATALOG_PASSWORD`(로컬 기본값 `iceberg-local`)이고, MinIO 자격 증명은 AWS SDK 환경변수로 전달한다. Catalog PostgreSQL은 호스트 5432 포트로 공개하며 DB와 사용자는 `iceberg`다. 현재 Compose의 포트 매핑은 localhost로 제한하지 않으므로 외부 접근 가능성은 호스트 방화벽/네트워크 설정에 따라 달라진다. 이 자격 증명·포트 구성은 로컬 학습용이며 공용 네트워크 노출을 피한다. 데이터 파일은 `minio-data`, catalog는 `iceberg-catalog-data` 볼륨에 유지된다. 둘을 함께 보존해야 테이블을 계속 조회할 수 있다. `make down`은 보존하고, `make reset`은 두 볼륨을 포함해 기존 로컬 데이터 전체를 삭제한다.
 
 ## Kafka → Iceberg Bronze
 
@@ -99,7 +101,7 @@ make bronze-logs     # 실행 로그 확인
 make bronze-stop     # 상시 적재만 중지; 데이터와 checkpoint 보존
 ```
 
-`bronze`는 `streaming` profile의 독립 서비스다. `spark`는 SQL·데모·단발 작업용으로 유지한다. 두 서비스가 같은 checkpoint 볼륨을 사용하므로 동시에 writer를 실행하면 파일 잠금으로 거부한다. `bronze-up` 이후 새 메시지는 다음 trigger에서 반영된다. Bronze 서비스는 호스트 UI 포트를 노출하지 않는다.
+`bronze`는 `streaming` profile의 독립 서비스다. `spark`는 SQL·데모·단발 작업용으로 유지한다. 두 서비스가 같은 checkpoint 볼륨을 사용하므로 동시에 writer를 실행하면 파일 잠금으로 거부한다. `bronze-up` 이후 새 메시지는 다음 trigger에서 반영된다. 실행 중 Bronze UI는 `http://localhost:4041`에서 확인한다.
 
 테이블은 `lakehouse.bronze.booking_events`다. MinIO의 `warehouse/iceberg/bronze/booking_events/`에서 파일을 볼 수 있다.
 
@@ -126,6 +128,15 @@ checkpoint는 `spark-checkpoints` 볼륨의 `/opt/spark/checkpoints/booking-even
 `minio-data`, `iceberg-catalog-data`, `spark-checkpoints`를 함께 보존해야 한다. checkpoint만 지우면 재읽기에 따른 중복이 생길 수 있고, 테이블만 없어지면 스크립트가 시작을 거부한다. 토픽 재생성·테이블 교체·볼륨 부분 복구도 자동 복구 대상이 아니다. `make reset`/`make smoke`는 이 데이터까지 초기화하므로 주의한다.
 
 검증기는 P0용 전체 비교다. Kafka의 현재 보존 레코드와 Bronze의 원문·위치를 양방향 대조하고, 중복 위치와 MySQL outbox `event_id` 집합을 검사한다. 지속 유입 중이거나 Kafka retention으로 과거 레코드가 삭제된 환경에서는 비교 범위를 맞춰야 하며, 운영 규모의 기간별 reconciliation은 후속 작업이다.
+
+## Silver 첫 모델 (SQL 학습용 배치)
+
+```bash
+make silver-events         # 기존 spark에서 booking_events_clean 전체 재계산·교체 후 종료
+make verify-silver-events  # 작은 SQL 테스트 후 동일한 테이블 재계산·교체 (읽기 전용 아님)
+```
+
+`lakehouse.silver.booking_events_clean` 하나만 만들며 Bronze 원문은 보존한다. 기존 Bronze snapshot에서 JSON을 펼치고 v1 기본 검증·event_id 중복 제거를 수행한다. 새 컨테이너나 streaming checkpoint는 추가하지 않는다. SQL과 실행기를 분리했고, dbt 이전 학습 단계로 시작한다. 다음 세 테이블과 dbt 이관은 후속 작업이다. 상세 규칙·한계·조회 SQL은 [Silver 학습 노트](docs/SILVER_STUDY.md)를 참고한다.
 
 ## Operations
 

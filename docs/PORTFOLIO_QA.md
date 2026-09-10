@@ -258,6 +258,12 @@ Iceberg 테이블 이름과 현재 metadata 위치를 Spark 작업 간에 유지
 
 공식 근거: [Iceberg Structured Streaming](https://iceberg.apache.org/docs/latest/spark-structured-streaming/), [Spark Kafka integration](https://spark.apache.org/docs/3.5.6/structured-streaming-kafka-integration.html).
 
+## Silver 첫 모델은 왜 스트리밍 대신 전체 재계산인가?
+
+현재 29건 규모에서는 SQL의 파싱·검증·중복 제거와 재실행 결과를 먼저 이해하는 것이 목적이다. Bronze snapshot을 고정해서 읽고 booking_events_clean만 원자적으로 교체한다. 같은 입력·규칙이면 행 결과가 같지만 매번 파일·snapshot이 생길 수 있어 무비용 재실행은 아니다. 대량 데이터에서는 비용이 커지므로 dbt 모델과 증분 처리로 확장할 계획이다. 이 학습 배치를 dbt P2 완료나 운영용 증분 파이프라인으로 주장하지 않는다.
+
+잘못된 행은 사유별 건수만 출력하고 Bronze에 보존한다. 영구 event_dq는 다음 과제다. 동일 event_id의 서로 다른 유효 payload는 보수적으로 실패시키며, 의미상 같은 JSON의 표현 차이도 현재 충돌로 취급한다.
+
 ## 연습 방법
 
 각 질문마다 다음 순서로 연습한다.

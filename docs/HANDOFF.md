@@ -76,6 +76,9 @@ Live:       generator -> MySQL + outbox -> Debezium -> Redpanda
 
 ## Current repository state
 
+- 2026-09-10: Silver 첫 테이블 `lakehouse.silver.booking_events_clean`을 Spark SQL full-refresh 학습 배치로 추가했다. SQL은 `spark/sql/silver/`, 실행기는 `silver_booking_events.py`다. `make silver-events`로 실행한다. 원문 파싱·타입 변환·기본 v1 검증·event_id 중복 제거 후 이 파생 테이블만 원자적으로 교체한다.
+- 입력 Bronze snapshot을 고정하고 제외 사유·건수를 출력한다. 원문 충돌은 쓰기 전에 실패시킨다. 제외 원문은 Bronze에 남기며 event_dq/current-state 테이블, dbt와 증분 처리는 아직 구현하지 않았다. 사용자가 다음 모델을 직접 만드는 학습 흐름을 유지한다. 상세는 `docs/SILVER_STUDY.md`에 기록했다.
+
 - 2026-09-09: Spark 3.5.6(Java 17) + Iceberg 1.11.0 + MinIO 연결 구성을 추가했다. `lakehouse` JDBC catalog는 별도 PostgreSQL 17.6에 metadata 위치를 기록하고, 실제 파일은 `s3://warehouse/iceberg`에 저장한다.
 - `make iceberg-up`, `make iceberg-demo`, `make iceberg-sql`로 연결 실습을 실행한다. 데모 테이블 `lakehouse.demo.connection_check`는 매 실행 시 2행을 추가한다. Spark는 `local[2]`다.
 - Kafka → `lakehouse.bronze.booking_events` append 스트리밍을 구현했다. 원문 문자열·바이트, key, headers, topic/partition/offset, timestamp와 적재 시각을 보존한다. 업무 중복 제거와 watermark는 적용하지 않는다.
