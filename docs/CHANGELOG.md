@@ -1,5 +1,36 @@
 # Change log
 
+## 2026-09-10 — Spark 학습 노트
+
+- `docs/SPARK_STUDY.md`에 PySpark 역할, local[2]/다중 노드, Bronze DDL·source·writer 옵션, trigger와 실행 시작/대기, MinIO 파일 쓰기와 Iceberg commit 시점을 정리했다.
+- README에 학습 문서 링크를 추가했다. 공식 문서와 현재 구현을 대조했으며 실행 코드·아키텍처·데이터 변경은 없다. 따라서 설계 변경이나 신규 장애 기록은 추가하지 않았다.
+
+## 2026-09-09 — Kafka → Iceberg Bronze 스트리밍
+
+- Spark Kafka connector와 전이 의존성을 고정 버전으로 이미지에 추가했다.
+- `lakehouse.bronze.booking_events`에 원문 문자열·바이트, key/headers, topic/partition/offset, Kafka timestamp와 적재 시각을 append한다. 적재일 partition을 사용하고 JSON 필터링·업무 중복 제거는 하지 않는다.
+- 영속 checkpoint 볼륨, 동일 checkpoint writer 잠금, checkpoint만 남고 테이블이 없는 경우의 시작 거부를 추가했다. Spark 실행기는 종료 signal을 자식 프로세스에 전달한다.
+- `bronze-once`, `bronze-up`, `bronze-stop`, `bronze-logs`, `verify-bronze` Make target을 추가했다. 상시 작업은 별도 `streaming` profile 서비스에서 1분 trigger로 실행한다.
+- 검증: 최초 29건 적재, 동일 checkpoint 재실행은 offset 29부터 신규 입력 0건. MySQL outbox ID 29개 일치, Kafka/Bronze 각 29건의 원문·metadata 양방향 일치, 중복 Kafka 위치 0건. 별도 Bronze 서비스의 스트리밍 시작도 확인했다.
+- 검증 입력의 stdin 대기 문제를 임시 파일 전달로 수정했다. 상세 내용은 `TROUBLESHOOTING.md`에 기록했다.
+- 설계서·README·HANDOFF·면접 Q&A를 최신화했다. 5분 live 생성과 처리 중 강제 종료/재개 실험은 다음 단계이며 P1 완료로 표기하지 않는다.
+
+## 2026-09-09 — Iceberg Catalog 선택 근거 기록
+
+- 전체 설계서 11.1절에는 PostgreSQL JDBC Catalog 선택 이유와 핵심 비용만 간략히 남겼다. 대안 비교·재검토 조건과 면접 질문·답변은 `docs/PORTFOLIO_QA.md`에 정리했다.
+- PostgreSQL의 성능 우위를 검증한 선택이 아님을 명시하고, 현재 연결 검증과 미검증 항목을 구분했다.
+- 저장소 내 포트폴리오 Q&A에도 면접 답변과 후속 질문의 근거를 추가했다. 실행 구성 변경은 없다.
+
+## 2026-09-09 — Spark·Iceberg·MinIO 연결 실습
+
+- Spark 3.5.6 Java 17 이미지에 Iceberg 1.11.0 runtime/AWS bundle과 PostgreSQL JDBC 42.7.7을 빌드 시 설치한다.
+- 별도 PostgreSQL 17.6 JDBC catalog와 영속 볼륨을 추가하고, `S3FileIO`를 MinIO endpoint/path-style로 연결했다.
+- 공용 Spark 설정과 환경변수 기반 자격 증명 실행기를 추가했다. SQL 콘솔과 데모 작업이 동일한 catalog를 사용한다.
+- `make iceberg-up`, `make iceberg-demo`, `make iceberg-sql`을 추가했다. 데모 데이터는 별도 `demo` namespace에 저장한다.
+- 미사용 Spark master 8080 포트를 제거하고 실행 중 application UI 4040을 문서화했다.
+- Kafka Bronze 적재·checkpoint 검증은 다음 단계로 남긴다.
+- 검증: `make iceberg-demo`로 2행 쓰기/조회, append snapshot 1개, MinIO Parquet 경로 2개를 확인했다. 별도 `spark-sql` 프로세스에서도 같은 두 행이 조회됐다. Compose 설정 검사와 diff 공백 검사도 통과했다.
+
 ShopSlot의 구현·계약·운영 방식에 영향을 주는 변경을 날짜순으로 기록한다. 커밋 메시지의 대체물이 아니라, 왜 변경했는지와 검증 결과를 빠르게 파악하기 위한 문서다.
 
 ## 2026-09-08 — 직원 엔터티와 예약 FK

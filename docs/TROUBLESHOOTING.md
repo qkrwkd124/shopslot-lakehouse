@@ -1,5 +1,23 @@
 # Troubleshooting
 
+## Bronze 검증기가 표준입력 EOF를 기다리며 멈춤
+
+- 증상: MySQL에서 추출한 `event_id`를 `spark-submit` 파이프로 전달했지만 Spark session 시작 전 Python 검증기가 대기했다.
+- 원인: Python 검증기가 `sys.stdin` 전체를 읽는 방식이었고, Docker exec → Spark JVM → Python 실행 경로에서 입력 종료가 기대대로 전달되지 않았다. 정상 종료 후 재실행 적재는 이미 성공한 상태여서 Bronze sink 문제가 아니었다.
+- 해결: 컨테이너 shell이 입력을 `mktemp` 파일에 먼저 수집한 뒤 `--outbox-ids-file` 경로를 넘기도록 변경했다. 검증 프로세스를 종료한 뒤 재실행했으며, 임시 파일은 shell의 EXIT trap으로 제거한다. 원본 데이터·checkpoint는 수정하지 않았다.
+- 검증: `make verify-bronze` 종료 코드 0. outbox ID 29개 일치, Kafka 29건과 Bronze 29건의 원문·metadata 일치, 중복 위치 0건.
+
+## Iceberg 실행 시 `UnsupportedClassVersionError` (61.0 / 55.0)
+
+- 증상: Iceberg SQL parser를 로드할 때 class file version 61.0을 Java 11이 읽지 못해 데모 작업이 실패했다.
+- 원인: `apache/spark:3.5.6` 기본 이미지의 Java 11과 Iceberg 1.11.0의 Java 17 바이트코드가 호환되지 않았다.
+- 해결: `apache/spark:3.5.6-scala2.12-java17-python3-ubuntu` 태그를 명시했다. Spark·Scala뿐 아니라 Java 버전도 라이브러리 호환 조건에 포함한다.
+- 검증: Java 17.0.15에서 Iceberg 쓰기/조회가 성공했고, 별도 Spark SQL 프로세스에서도 저장된 두 행을 읽었다.
+
+## Spark 실행 중 native-hadoop library 경고
+
+`Unable to load native-hadoop library ... using builtin-java classes`는 네이티브 최적화 대신 Java 구현을 쓴다는 경고다. HDFS 서버 연결 실패를 의미하지 않는다. 이 구성은 Iceberg `S3FileIO`로 MinIO에 접근한다.
+
 재현 가능한 증상, 근본 원인, 해결 방법, 검증 결과를 기록한다. 같은 문제를 다시 만났을 때 임시 우회 대신 안전한 해결책을 선택하는 기준이다.
 
 ## 엔터티 PK 변경 후 검증 SQL에서 `Unknown column 'p.payment_id'`

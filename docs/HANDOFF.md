@@ -76,6 +76,14 @@ Live:       generator -> MySQL + outbox -> Debezium -> Redpanda
 
 ## Current repository state
 
+- 2026-09-09: Spark 3.5.6(Java 17) + Iceberg 1.11.0 + MinIO 연결 구성을 추가했다. `lakehouse` JDBC catalog는 별도 PostgreSQL 17.6에 metadata 위치를 기록하고, 실제 파일은 `s3://warehouse/iceberg`에 저장한다.
+- `make iceberg-up`, `make iceberg-demo`, `make iceberg-sql`로 연결 실습을 실행한다. 데모 테이블 `lakehouse.demo.connection_check`는 매 실행 시 2행을 추가한다. Spark는 `local[2]`다.
+- Kafka → `lakehouse.bronze.booking_events` append 스트리밍을 구현했다. 원문 문자열·바이트, key, headers, topic/partition/offset, timestamp와 적재 시각을 보존한다. 업무 중복 제거와 watermark는 적용하지 않는다.
+- `make bronze-once`는 현재까지 적재 후 종료하고, `make bronze-up`은 `streaming` profile의 별도 서비스에서 1분 trigger로 계속 적재한다. checkpoint는 `spark-checkpoints` 볼륨으로 공유하며 파일 잠금으로 동시 writer를 막는다. `make bronze-stop`으로 중지한다.
+- 첫 적재 29건과 동일 checkpoint 재실행의 신규 입력 0건을 확인했다. `make verify-bronze`도 통과했다: Kafka/Bronze 원문·위치 29건과 MySQL outbox ID 29개 일치, 중복 위치 0건. 지속 유입·retention 경계의 운영용 검증은 아니다.
+- Catalog DB의 `iceberg-catalog-data`, 파일의 `minio-data`, checkpoint의 `spark-checkpoints` 볼륨은 함께 보존한다. Iceberg 내부 catalog 테이블은 Iceberg가 생성하며 MySQL Alembic 대상이 아니다.
+- 연결 검증: 샘플 2행, append snapshot 1개, Parquet 파일 2개를 확인했고 새 Spark SQL 프로세스에서 재조회했다. 파일은 MinIO Console의 `warehouse/iceberg/demo/connection_check/`에서 볼 수 있다.
+
 - Docker Compose의 MySQL, Redpanda, Redpanda Console, Debezium, MinIO, Spark 기본 구성은 있다. Console은 `http://localhost:8084`에서 Kafka 토픽과 메시지를 조회한다.
 - 아직 배포 전인 P0 migration은 최종 스키마를 만드는 단일 초기 revision `20260908_0001`로 squash했다. `staffs`, `bookings.staff_id` FK와 `payment_transactions.id`가 모두 포함된다. Compose의 `migrate` 서비스가 Debezium과 generator보다 먼저 migration을 적용한다.
 - Python 의존성 범위는 `pyproject.toml`, 정확한 설치 버전과 해시는 `uv.lock`으로 관리한다. 공용 Dockerfile은 고정된 uv 바이너리와 `uv sync --locked --no-dev`를 사용한다.
@@ -92,10 +100,10 @@ Live:       generator -> MySQL + outbox -> Debezium -> Redpanda
 
 ## Next task
 
-1. Spark Structured Streaming이 `booking.events.v1`을 읽어 Kafka metadata와 원문 payload를 Iceberg Bronze에 append하도록 구현한다.
-2. checkpoint를 적용하고 Spark kill/restart 후 이어 읽기를 검증한다.
-3. MySQL outbox, Kafka, Bronze 사이의 `event_id` reconciliation을 추가한다.
-4. 지속적인 신규 이벤트를 위한 `produce_live.py`를 추가한다. FastAPI scenario API는 필요할 때만 확장한다.
+1. 지속적인 신규 이벤트를 위한 `produce_live.py`를 추가한다. FastAPI scenario API는 필요할 때만 확장한다.
+2. 5분 live 유입 중 Bronze 증가와 처리 중 Spark kill/restart 후 정합성을 검증해 P1 완료 조건을 채운다. 현재 확인한 것은 고정 P0 적재와 정상 종료 후 재실행이다.
+3. retention·지속 유입을 고려한 기간/offset 범위 기반 reconciliation으로 확장한다.
+4. dbt Silver/Gold와 DQ·중복 제거를 구현한다.
 
 ## Commands
 
