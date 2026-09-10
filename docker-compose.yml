@@ -181,7 +181,8 @@ services:
   bronze:
     <<: *spark-runtime
     profiles: ["streaming"]
-    ports: []
+    ports:
+      - "4041:4040"
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
@@ -196,6 +197,8 @@ services:
 
   iceberg-catalog-db:
     image: postgres:17.6
+    ports:
+     - "5432:5432"
     environment:
       POSTGRES_DB: iceberg
       POSTGRES_USER: iceberg
