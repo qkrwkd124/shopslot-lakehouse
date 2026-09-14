@@ -1,5 +1,19 @@
 # Troubleshooting
 
+## Thrift JDBC 접속 시 lakehouse.default SCHEMA_NOT_FOUND
+
+- 검증: 수정 후 동일 JDBC URL로 세션 생성, `SELECT 1`, Bronze/Silver 각각 29건 조회 성공. Beeline 종료 시 `/home/spark/.beeline` 디렉터리 생성 경고는 있었으나 조회와 종료 코드 0에는 영향이 없었다.
+- 증상: 서버 포트는 healthy이나 JDBC 세션 생성이 `lakehouse.default` namespace 부재로 실패했다.
+- 원인: Hive JDBC가 접속 시 기본 database를 열고, 공용 Spark 설정의 defaultCatalog가 `lakehouse`인데 해당 catalog에는 `default` namespace가 없었다.
+- 해결: Thrift 모드에만 `spark.sql.defaultCatalog=spark_catalog`를 적용했다. 초기 연결은 기본 Hive namespace를 쓰고 업무 조회는 `lakehouse.bronze.*`/`lakehouse.silver.*`를 명시한다. Iceberg에 불필요한 namespace를 생성하거나 기존 배치 설정을 바꾸지 않는다.
+
+## Spark SQL CLI의 Derby XSDB6 잠금 충돌
+
+- 증상: SQL 세션 시작 시 `/opt/spark/work-dir/metastore_db`에 `Another instance of Derby may have already booted the database` 발생.
+- 확인: 기존 `run.py sql`과 `SparkSQLCLIDriver` JVM이 실행 중이었다. 별도 SQL JVM들이 기본 embedded Hive metastore 경로를 공유할 때 발생하는 잠금 충돌이며 PostgreSQL Iceberg catalog의 행 잠금이 아니다.
+- 대응: 기존 CLI에서 `quit;`으로 종료한 후 다시 접속한다. 세션을 찾을 수 없으면 다른 Spark 작업이 없는지 확인한 뒤 해당 컨테이너 재시작을 고려한다. 사용 중인 Derby의 lock 파일을 삭제하지 않는다.
+- 구성 개선: JDBC 접속용 Thrift 서버를 별도 컨테이너/Derby 경로로 분리했다. DBeaver 연결은 이 서버를 사용한다. 기존 CLI를 여러 개 실행하는 동작 자체는 변경하지 않았다.
+
 ## Bronze 검증기가 표준입력 EOF를 기다리며 멈춤
 
 - 증상: MySQL에서 추출한 `event_id`를 `spark-submit` 파이프로 전달했지만 Spark session 시작 전 Python 검증기가 대기했다.
