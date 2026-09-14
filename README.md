@@ -49,6 +49,36 @@ The generator uses a fixed UUID namespace and `Asia/Seoul` timestamps inside the
 
 ## Local endpoints
 
+추가 실험은 다음 절의 예약 추가 명령을 사용한다.
+
+### 예약 1건 추가와 snapshot 비교
+
+P0가 생성된 환경에서 `make add-booking`을 실행한다. 기존 데이터를 지우지 않고 AUTO_INCREMENT로 발급한 신규 예약과 UUID를 가진 `booking_created` outbox 이벤트를 같은 트랜잭션으로 추가한다. 매 실행이 별도의 예약 생성이며 재시도 요청의 중복 방지는 없다. 통신 단절 등으로 commit 결과가 불명확하면 재실행 전에 MySQL/outbox를 확인한다.
+
+ID 순으로 첫 번째 활성 매장·동일 매장의 활성 서비스/직원과 기존 고객을 선택하고 서비스 가격을 예약 가격으로 복사한다. 이벤트 시각은 현재 Asia/Seoul, 예약 시각은 다음 날 같은 시각이다. 예약 슬롯 충돌 판단이나 결제는 하지 않는 로컬 검증용 스크립트다. 기초 데이터가 없으면 쓰기 전에 종료한다. P0의 공통 payload/outbox/transaction 함수만 재사용하며 P0 생성 작업 자체는 호출하지 않는다.
+
+```bash
+make add-booking
+```
+
+출력된 `booking_id`, `event_id`를 기록한다. Debezium이 정상 동작하면 Kafka로 비동기 전달된다. 상시 Bronze가 실행 중이면 다음 처리를 기다린다. 중지 상태라면 Console에서 Kafka 도착을 확인한 뒤 `make bronze-once`를 실행한다. 동일 checkpoint의 writer를 동시에 실행하지 않는다.
+
+DBeaver에서 추가 전후의 main snapshot ID를 기록하고 다음을 비교한다.
+
+```sql
+SELECT snapshot_id FROM lakehouse.bronze.booking_events.refs WHERE name = 'main';
+SELECT committed_at, snapshot_id, operation
+FROM lakehouse.bronze.booking_events.snapshots ORDER BY committed_at DESC;
+SELECT count(*) FROM lakehouse.bronze.booking_events;
+-- 출력된 실제 event_id로 바꿔 조회한다
+SELECT * FROM lakehouse.bronze.booking_events
+WHERE get_json_object(payload, '$.event_id') = '<event_id>';
+```
+
+신규 이벤트 1건만 한 번 정상 전달·적용됐다면 Bronze는 29→30건이 된다. 새 snapshot은 MySQL commit 시점이 아니라 Bronze commit 후 만들어진다. `make silver-events`를 수동 실행하면 clean도 재계산된다. 기존 데이터를 유지하려면 `make smoke` / `make reset`을 사용하지 않는다. 고정 29건을 전제로 하는 `verify-p0`는 추가 후 기대값이 맞지 않으므로 추가 실험과 고정 P0 검증을 구분한다.
+
+### 접속 주소
+
 | Service | Endpoint |
 | --- | --- |
 | MySQL | `localhost:3306` |
@@ -85,7 +115,7 @@ SELECT file_path, record_count FROM lakehouse.demo.connection_check.files;
 
 실행 조합은 Spark 3.5.6 / Scala 2.12 / Java 17 / Iceberg 1.11.0 / PostgreSQL JDBC 42.7.7 / PostgreSQL 17.6이다. Java JAR는 `spark/Dockerfile` 빌드 시 버전을 고정해 설치하며 `uv.lock`과 별개다. Spark는 `local[2]`로 동작하며 별도의 master/worker 클러스터는 없다.
 
-Catalog 접속 비밀번호는 `ICEBERG_CATALOG_PASSWORD`(로컬 기본값 `iceberg-local`)이고, MinIO 자격 증명은 AWS SDK 환경변수로 전달한다. Catalog PostgreSQL은 호스트 5432 포트로 공개하며 DB와 사용자는 `iceberg`다. 현재 Compose의 포트 매핑은 localhost로 제한하지 않으므로 외부 접근 가능성은 호스트 방화벽/네트워크 설정에 따라 달라진다. 이 자격 증명·포트 구성은 로컬 학습용이며 공용 네트워크 노출을 피한다. 데이터 파일은 `minio-data`, catalog는 `iceberg-catalog-data` 볼륨에 유지된다. 둘을 함께 보존해야 테이블을 계속 조회할 수 있다. `make down`은 보존하고, `make reset`은 두 볼륨을 포함해 기존 로컬 데이터 전체를 삭제한다.
+Catalog 접속 비밀번호는 `ICEBERG_CATALOG_PASSWORD`(로컬 기본값 `iceberg-local`)이고, MinIO 자격 증명은 AWS SDK 환경변수로 전달한다. Catalog PostgreSQL은 호스트 5432 포트로 공개하며 DB와 사용자는 `iceberg`다. 현재 Compose의 포트 매핑은 localhost로 제한하지 않으므로 외부 접근 가능성은 호스트 방화벽/네트워크 설정에 따라 달라진다. 이 자격 증명·포트 구성은 로컬 개발용이며 공용 네트워크 노출을 피한다. 데이터 파일은 `minio-data`, catalog는 `iceberg-catalog-data` 볼륨에 유지된다. 둘을 함께 보존해야 테이블을 계속 조회할 수 있다. `make down`은 보존하고, `make reset`은 두 볼륨을 포함해 기존 로컬 데이터 전체를 삭제한다.
 
 ## Kafka → Iceberg Bronze
 
@@ -129,14 +159,38 @@ checkpoint는 `spark-checkpoints` 볼륨의 `/opt/spark/checkpoints/booking-even
 
 검증기는 P0용 전체 비교다. Kafka의 현재 보존 레코드와 Bronze의 원문·위치를 양방향 대조하고, 중복 위치와 MySQL outbox `event_id` 집합을 검사한다. 지속 유입 중이거나 Kafka retention으로 과거 레코드가 삭제된 환경에서는 비교 범위를 맞춰야 하며, 운영 규모의 기간별 reconciliation은 후속 작업이다.
 
-## Silver 첫 모델 (SQL 학습용 배치)
+## Silver 이벤트 정제 (full-refresh 배치)
 
 ```bash
 make silver-events         # 기존 spark에서 booking_events_clean 전체 재계산·교체 후 종료
 make verify-silver-events  # 작은 SQL 테스트 후 동일한 테이블 재계산·교체 (읽기 전용 아님)
 ```
 
-`lakehouse.silver.booking_events_clean` 하나만 만들며 Bronze 원문은 보존한다. 기존 Bronze snapshot에서 JSON을 펼치고 v1 기본 검증·event_id 중복 제거를 수행한다. 새 컨테이너나 streaming checkpoint는 추가하지 않는다. SQL과 실행기를 분리했고, dbt 이전 학습 단계로 시작한다. 다음 세 테이블과 dbt 이관은 후속 작업이다. 상세 규칙·한계·조회 SQL은 [Silver 학습 노트](docs/SILVER_STUDY.md)를 참고한다.
+`lakehouse.silver.booking_events_clean` 하나만 만들며 Bronze 원문은 보존한다. 기존 Bronze snapshot에서 JSON을 펼치고 v1 기본 검증·event_id 중복 제거를 수행한다. 새 컨테이너나 streaming checkpoint는 추가하지 않는다. SQL과 실행기를 분리했으며, 현재 실행 엔진은 Spark이고 dbt는 아직 도입하지 않았다. 다음 세 테이블과 dbt 이관은 후속 작업이다. 상세 규칙·한계·조회 SQL은 [Silver 변환 명세](docs/SILVER_GUIDE.md)를 참고한다.
+
+## DBeaver에서 Spark SQL 실행
+
+Thrift 연결의 초기 catalog는 `spark_catalog`다. Hive JDBC가 접속 시 여는 `default` namespace를 지원하기 위한 설정이며, Iceberg는 SQL에서 `lakehouse`를 명시해 사용한다. 기존 CLI/배치의 기본 catalog 설정은 변경하지 않는다.
+
+`make thrift-up`으로 JDBC 접속용 `spark-thrift` 서비스를 실행한다. profile 없이 기본 Compose 기동에도 포함된다. 기존 Spark 이미지·Iceberg 설정을 재사용하지만 독립 JVM(`local[2]`, driver 1GB)이므로 추가 메모리가 필요하다. `make thrift-stop`으로 중지하고 `make thrift-logs`로 로그를 확인한다.
+
+DBeaver의 새 연결에서 **Apache Hive** 드라이버를 선택한다.
+
+- Host: `localhost`, Port: `10000`
+- JDBC URL: `jdbc:hive2://localhost:10000/` (초기 database 지정 없이 연결)
+- Username: `spark`, Password: 비워 둠. 로컬 개발용 무인증(`NONE`) 설정이며 사용자명은 보안 인증 수단이 아니다.
+- Spark UI: `http://localhost:4042`. JDBC/UI 모두 호스트 `127.0.0.1`에만 공개한다. Docker 내부 네트워크는 신뢰된 로컬 서비스만 사용하며 외부 공개 시 인증·TLS·접근 통제를 별도 설계한다.
+
+```sql
+SHOW NAMESPACES IN lakehouse;
+SHOW TABLES IN lakehouse.silver;
+SELECT booking_id, event_type, event_time
+FROM lakehouse.silver.booking_events_clean LIMIT 100;
+```
+
+서버가 Iceberg catalog의 metadata 위치를 조회하고 MinIO의 파일을 읽는다. DBeaver는 SQL 입력/결과 표시 도구이며 PostgreSQL catalog에 직접 연결하는 것과 다르다. Hive JDBC의 탐색기/자동완성에 테이블이 안 보이면 위와 같이 전체 이름을 지정해 조회한다. SQL 문법은 Spark SQL이며 Python 배치에서 만든 임시 view는 이 연결에 공유되지 않는다.
+
+Thrift의 기본 Hive metastore는 컨테이너 전용 `/tmp/shopslot-thrift-metastore`에 분리한다. CLI의 `/opt/spark/work-dir/metastore_db`와 공유하지 않아 두 서버의 Derby 잠금 충돌을 피한다. 이 임시 metastore에 영구 업무 테이블을 만들지 말고 `lakehouse.bronze.*`/`lakehouse.silver.*`처럼 Iceberg catalog를 명시한다. 실제 Iceberg catalog·데이터는 기존 PostgreSQL/MinIO 볼륨을 사용한다. TCP healthcheck는 포트 개방만 검사하므로 catalog/데이터 조회 성공까지 보장하지 않는다.
 
 ## Operations
 
@@ -181,11 +235,12 @@ spark/          Iceberg/Kafka runtime, catalog configuration, SQL launcher, demo
 scripts/        repeatable verification commands
 ```
 
-## Change records
+## 기술 문서
 
-- [Spark 학습 노트](docs/SPARK_STUDY.md): local 모드, Bronze 코드·옵션, trigger·checkpoint와 MinIO 저장 시점
+- [문서 안내](docs/README.md): 공개 문서 범위와 구성 요소의 선택 이유
+
+- [Spark Bronze 기술 가이드](docs/SPARK_GUIDE.md): local 모드, Bronze 코드·옵션, trigger·checkpoint와 MinIO 저장 시점
 - [Change log](docs/CHANGELOG.md): 구현·계약·운영 방식의 변경과 검증 결과
 - [Troubleshooting](docs/TROUBLESHOOTING.md): 재현 조건, 원인, 해결, 검증을 포함한 문제 해결 기록
-- [Portfolio interview Q&A](docs/PORTFOLIO_QA.md): 현재 구현 근거, 설계 트레이드오프, 남은 한계를 설명하는 면접 연습 문서
 
-스키마·이벤트 계약·아키텍처 경계가 변경되면 같은 변경에서 이 문서들과 포트폴리오 설계서를 함께 갱신한다.
+스키마·이벤트 계약·아키텍처 경계가 변경되면 관련 기술 문서와 변경 기록을 함께 갱신한다.

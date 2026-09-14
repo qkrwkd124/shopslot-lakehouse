@@ -6,3 +6,10 @@ warehouse/
 checkpoints/
 __pycache__/
 *.py[cod]
+
+# Local-only notes and backups
+.private-docs/
+docs/HANDOFF.md
+docs/PORTFOLIO_QA.md
+docs/SPARK_STUDY.md
+docs/SILVER_STUDY.md

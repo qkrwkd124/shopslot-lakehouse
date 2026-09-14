@@ -1,24 +1,49 @@
 # Change log
 
+## 2026-09-14 — 공개 기술 문서 정리
+
+- 공개 문서를 실행 가이드, 변환 명세, 검증 결과, 기술적 한계 및 변경 기록으로 정리했다.
+- Spark·Silver 가이드의 경로를 정리하고 README의 문서 링크를 갱신했다. 증분 전환·정합성·성능 비교 계획은 미구현 항목으로 유지한다.
+- 실행 코드와 데이터는 변경하지 않았다.
+
+## 2026-09-14 — 단발 예약·outbox 추가 스크립트
+
+- `generator/add_booking.py`와 `make add-booking`을 추가했다. 기존의 유효한 참조 데이터로 신규 예약 1건과 UUID 이벤트 1건을 같은 MySQL 트랜잭션으로 기록한다.
+- 고정 P0 생성과 분리했으며 기존 데이터·이벤트 계약은 유지한다. 반복 실행은 매번 신규 예약이며 요청의 멱등성과 예약 슬롯 충돌 판단은 범위 밖이다.
+- README에 수동 실행과 snapshot 전후 비교, 고정 P0 검증 기대값에 미치는 영향을 기록했다. 문법·Make dry-run·diff만 확인하며 데이터 생성이나 서비스 기동은 실행하지 않는다.
+
+## 2026-09-14 — Silver 증분 전환과 비교 실험 계획
+
+- 전체 설계서와 `SILVER_GUIDE.md`에 full refresh 기준 결과 확보 → 증분 반영 → 정합성·규모별 성능 비교 순서를 명시했다.
+- 전체 snapshot 읽기와 추가분 읽기, 결과 중복과 중복 계산을 구분하고 진행 위치·재실행·지연 이벤트 검증 항목을 정리했다.
+- 향후 계획이며 구현·측정 완료가 아니다. 이번 변경은 문서에 한정하고 기존 실행 코드와 작업 중 파일은 수정하지 않았다.
+
+## 2026-09-14 — Spark Thrift JDBC 접속
+
+- 검증: Compose 설정 검사·빌드 성공. Beeline으로 JDBC 접속 후 `SELECT 1`, Bronze 29건, Silver 29건 조회 성공(종료 코드 0). DBeaver GUI 자체는 아직 연결하지 않았다. 초기 namespace 오류와 Thrift 전용 기본 catalog 수정은 TROUBLESHOOTING에 기록했다.
+- Compose에 `spark-thrift`를 추가하고 공용 실행기에 foreground Thrift 모드를 추가했다. 기존 이미지와 Iceberg 설정을 재사용하며 기본 기동에 포함한다.
+- 로컬 전용 JDBC `10000`, Spark UI `4042`, 독립 Derby 경로와 TCP healthcheck를 구성했다. 기존 CLI·Bronze 프로세스와 데이터 볼륨은 변경하지 않는다.
+- `thrift-up/stop/logs` 명령, DBeaver Hive JDBC 접속법과 무인증 로컬 구성의 제한을 README에 기록했다.
+
 ## 2026-09-10 — 로컬 관찰용 접속 포트
 
-- 사용자가 추가한 Bronze Spark UI `4041:4040`, Catalog PostgreSQL `5432:5432` 매핑을 기록하고 README 접속 정보를 맞췄다.
-- 포트 매핑을 임의로 바꾸지 않았다. 현재는 loopback 한정이 아니므로 로컬 학습 환경의 접근 통제에 주의한다.
+- Bronze Spark UI `4041:4040`, Catalog PostgreSQL `5432:5432` 매핑을 기록하고 README 접속 정보를 맞췄다.
+- 해당 포트는 loopback 한정이 아니므로 로컬 개발 환경의 접근 통제에 주의한다.
 
-## 2026-09-10 — 첫 Silver SQL 학습 모델
+## 2026-09-10 — 첫 Silver SQL 배치 모델
 
 - `lakehouse.silver.booking_events_clean` 하나를 만드는 배치를 추가했다. 새 컨테이너/dbt/checkpoint는 추가하지 않고 기존 Spark에서 SQL을 실행한다.
 - JSON 파싱·타입 변환·기본 schema v1 검증과 event_id 중복 제거를 두 SQL 파일로 분리했다. 유효한 동일 event_id의 payload 충돌은 쓰기 전에 실패시킨다. 제외 사유를 집계하고 원문은 Bronze에 유지한다.
-- Bronze snapshot 고정 후 파생 Silver만 원자적으로 전체 교체한다. 빈 입력/유효 결과 0건이면 기존 결과를 보존한다. 대량 증분 처리·영구 DQ·current-state 테이블은 후속 학습 범위다.
+- Bronze snapshot 고정 후 파생 Silver만 원자적으로 전체 교체한다. 빈 입력/유효 결과 0건이면 기존 결과를 보존한다. 대량 증분 처리·영구 DQ·current-state 테이블은 후속 개발 범위다.
 - `make silver-events`, `make verify-silver-events`를 추가했다. 후자는 테스트 후 테이블도 재작성한다. 기본 make 목표를 up으로 명시해 새 target 추가로 인한 의도치 않은 Silver 실행을 막았다.
 - 작은 메모리 fixture에서 JSON·타입 오류, 필수값 누락, v2 미지원, 결제 필드 누락, 중복 대표행 선택, payload 충돌 거부를 검증했다. 최초 적재는 Bronze 29건 → Silver 29건, 제외 0건이며 계산 결과와 저장 결과를 양방향 비교했다.
-- `docs/SILVER_STUDY.md`와 README·HANDOFF·Q&A·외부 설계서를 최신화했다. 사용자의 기존 Compose UI 포트 변경은 보존했다.
+- Silver 기술 문서와 README·설계서에 구현 상태와 제약을 반영했다.
 - 동일 Bronze snapshot으로 `make silver-events`를 재실행해 Silver 29건 유지와 계산/저장 결과 일치를 다시 확인했다. 새 snapshot으로 교체되지만 행이 append되어 두 배로 늘어나지 않았다.
 
-## 2026-09-10 — Spark 학습 노트
+## 2026-09-10 — Spark 기술 문서
 
-- `docs/SPARK_STUDY.md`에 PySpark 역할, local[2]/다중 노드, Bronze DDL·source·writer 옵션, trigger와 실행 시작/대기, MinIO 파일 쓰기와 Iceberg commit 시점을 정리했다.
-- README에 학습 문서 링크를 추가했다. 공식 문서와 현재 구현을 대조했으며 실행 코드·아키텍처·데이터 변경은 없다. 따라서 설계 변경이나 신규 장애 기록은 추가하지 않았다.
+- `docs/SPARK_GUIDE.md`에 PySpark 역할, local[2]/다중 노드, Bronze DDL·source·writer 옵션, trigger와 실행 시작/대기, MinIO 파일 쓰기와 Iceberg commit 시점을 정리했다.
+- README에 기술 문서 링크를 추가했다. 공식 문서와 현재 구현을 대조했으며 실행 코드·아키텍처·데이터 변경은 없다. 따라서 설계 변경이나 신규 장애 기록은 추가하지 않았다.
 
 ## 2026-09-09 — Kafka → Iceberg Bronze 스트리밍
 
@@ -28,13 +53,12 @@
 - `bronze-once`, `bronze-up`, `bronze-stop`, `bronze-logs`, `verify-bronze` Make target을 추가했다. 상시 작업은 별도 `streaming` profile 서비스에서 1분 trigger로 실행한다.
 - 검증: 최초 29건 적재, 동일 checkpoint 재실행은 offset 29부터 신규 입력 0건. MySQL outbox ID 29개 일치, Kafka/Bronze 각 29건의 원문·metadata 양방향 일치, 중복 Kafka 위치 0건. 별도 Bronze 서비스의 스트리밍 시작도 확인했다.
 - 검증 입력의 stdin 대기 문제를 임시 파일 전달로 수정했다. 상세 내용은 `TROUBLESHOOTING.md`에 기록했다.
-- 설계서·README·HANDOFF·면접 Q&A를 최신화했다. 5분 live 생성과 처리 중 강제 종료/재개 실험은 다음 단계이며 P1 완료로 표기하지 않는다.
+- 설계서와 README에 구현 상태를 반영했다. 5분 live 생성과 처리 중 강제 종료/재개 실험은 다음 단계이며 P1 완료로 표기하지 않는다.
 
 ## 2026-09-09 — Iceberg Catalog 선택 근거 기록
 
-- 전체 설계서 11.1절에는 PostgreSQL JDBC Catalog 선택 이유와 핵심 비용만 간략히 남겼다. 대안 비교·재검토 조건과 면접 질문·답변은 `docs/PORTFOLIO_QA.md`에 정리했다.
+- PostgreSQL JDBC Catalog 선택 이유와 별도 인스턴스 운영 비용을 설계 문서에 기록했다.
 - PostgreSQL의 성능 우위를 검증한 선택이 아님을 명시하고, 현재 연결 검증과 미검증 항목을 구분했다.
-- 저장소 내 포트폴리오 Q&A에도 면접 답변과 후속 질문의 근거를 추가했다. 실행 구성 변경은 없다.
 
 ## 2026-09-09 — Spark·Iceberg·MinIO 연결 실습
 
@@ -117,17 +141,6 @@ ShopSlot의 구현·계약·운영 방식에 영향을 주는 변경을 날짜�
 - 결제 최종 상태가 paid 5건, partially-refunded 1건, refunded 1건이고 거래 합계와 summary가 일치함을 확인했다.
 - `booking.events.v1`에서 7종의 plain JSON 이벤트 총 29건을 확인했다.
 
-## 2026-09-08 — 구현 근거 중심 포트폴리오 Q&A
-
-### Added
-
-- `docs/PORTFOLIO_QA.md`에 프로젝트 요약, outbox와 CDC의 역할, 전달 보장, partition key, Bronze, watermark, Alembic, 동기 DB 선택과 장애 복구 질문을 정리했다.
-- 답변마다 현재 구현, 향후 계획, 의도적으로 남은 한계를 구분해 아직 검증하지 않은 내용을 성과처럼 설명하지 않도록 했다.
-
-### Changed
-
-- README와 HANDOFF에서 구현 변경과 함께 면접 Q&A도 지속적으로 갱신하도록 문서 운영 규칙을 확장했다.
-
 ## 2026-09-08 — uv 기반 재현 가능한 Python 이미지 빌드
 
 ### Added
@@ -159,7 +172,7 @@ ShopSlot의 구현·계약·운영 방식에 영향을 주는 변경을 날짜�
 
 - 테이블 DDL의 단일 원본을 `mysql/init/001_schema.sql`에서 ORM 모델과 Alembic revision으로 옮겼다.
 - `mysql/init/001_bootstrap.sql`은 Debezium 복제 계정 생성만 담당한다.
-- README, HANDOFF, 포트폴리오 설계서에 migration ownership과 디렉터리 구조를 반영했다.
+- README와 설계서에 migration ownership과 디렉터리 구조를 반영했다.
 
 ### Verified
 

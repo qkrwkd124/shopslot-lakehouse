@@ -1,6 +1,6 @@
-# Spark 학습 노트 — ShopSlot Bronze 코드 읽기
+# Spark Bronze 기술 가이드
 
-기준: 2026-09-10, Spark 3.5.6 / Iceberg 1.11.0. 구현 근거는 `spark/jobs/bronze_stream.py`와 `spark/conf/spark-defaults.conf`다. 학습한 개념과 코드의 연결을 기록하며, 면접 답변은 `PORTFOLIO_QA.md`에서 관리한다.
+기준: 2026-09-10, Spark 3.5.6 / Iceberg 1.11.0. 구현 근거는 `spark/jobs/bronze_stream.py`와 `spark/conf/spark-defaults.conf`다. 현재 구현의 실행 흐름, 설정, 검증 범위와 운영 제약을 설명한다.
 
 ## 1. 역할부터 구분하기
 
@@ -11,7 +11,7 @@
 - MinIO: S3 API로 접근하는 실제 파일 저장소. Parquet 데이터와 Iceberg metadata 파일을 저장한다.
 - Bronze: 원본 보존 계층. 이번 구현은 원문 외에 Kafka 위치와 적재 시각을 붙인다. 업무 정제·중복 제거·최신 상태·집계는 후속 Silver/Gold의 책임이다.
 
-Spark는 단순 파일 적재에 필수는 아니다. 이 프로젝트에서는 Iceberg 스트리밍 적재와 checkpoint, 향후 대량 backfill을 같은 엔진으로 학습하려고 사용한다. 29건 처리에 필요한 최소 구성이라고 주장하지 않는다.
+Spark는 단순 파일 적재에 필수는 아니다. 이 프로젝트에서는 Iceberg 스트리밍 적재와 checkpoint, 향후 대량 backfill을 같은 엔진으로 처리하기 위해 사용한다. 29건 처리에 필요한 최소 구성이라고 주장하지 않는다.
 
 ## 2. local[2]와 다중 노드
 
@@ -21,7 +21,7 @@ Spark는 단순 파일 적재에 필수는 아니다. 이 프로젝트에서는 
 
 Standalone에서는 `local[2]` 대신 `spark://master:7077`에 제출한다. Spark 3.5.6 Standalone의 Python 작업은 cluster deploy mode를 지원하지 않으므로 client mode와 구분해야 한다. 다중 노드 전환에는 네트워크·의존성 배포·checkpoint 저장소와 잠금 방식도 검토해야 한다. 한 노트북의 여러 컨테이너는 여러 물리 머신의 자원·장애 격리와 다르다.
 
-현재 다중 노드 실험은 하지 않았다. 대량 입력·병목 실험과 함께 후속 학습으로 남긴다. [Spark 실행 설정](https://spark.apache.org/docs/3.5.6/submitting-applications.html), [Cluster overview](https://spark.apache.org/docs/3.5.6/cluster-overview.html).
+현재 다중 노드 실험은 하지 않았다. 대량 입력·병목 실험과 함께 후속 검증 범위로 남긴다. [Spark 실행 설정](https://spark.apache.org/docs/3.5.6/submitting-applications.html), [Cluster overview](https://spark.apache.org/docs/3.5.6/cluster-overview.html).
 
 ## 3. 코드의 실행 순서
 
@@ -153,7 +153,7 @@ spark.sql.catalog.lakehouse.s3.endpoint http://minio:9000
 
 S3 쓰기는 `awaitTermination()`이 반환된 뒤가 아니라 기다리는 동안 매 batch에서 일어난다. 테이블 생성만 해도 metadata는 생길 수 있지만 이벤트 Parquet 적재는 streaming 실행 이후다. 1분 trigger가 매분 파일 하나를 만든다는 뜻도 아니다.
 
-## 9. 직접 확인할 순서 — 기존 데이터 유지
+## 9. 조회 및 검증 절차
 
 ```bash
 make iceberg-up
@@ -175,15 +175,4 @@ FROM lakehouse.bronze.booking_events.files;
 
 `.snapshots`, `.files`는 Iceberg가 제공하는 metadata table 조회다. 업무 테이블 이름 전체에 임의로 점을 붙인 것이 아니다. MinIO Console의 `warehouse` bucket에서도 파일을 확인할 수 있다. 계속 수신하려면 `make bronze-up`으로 시작한다.
 
-이 문서 작성 중 실행 검증이나 데이터 변경은 하지 않았다. 기존 검증 결과는 최초 29건 적재, 동일 checkpoint 재실행 입력 0건, Kafka/Bronze 29건과 MySQL ID 일치다. 처리 중 장애·다중 노드·대량 부하는 아직 미검증이다. `make smoke`/`make reset`은 볼륨을 초기화하므로 학습용 조회에 사용하지 않는다.
-
-## 10. 다음 분석 때 답해볼 질문
-
-1. `.load()`와 `.toTable()` 중 실제 스트리밍을 시작하는 것은 무엇인가?
-2. 29건 처리 후 같은 checkpoint로 다시 실행하면 몇 건을 새로 쓰는가?
-3. `maxOffsetsPerTrigger=10000`인데 3건만 들어오면 기다리는가?
-4. Kafka partition, Spark partition, Iceberg 날짜 partition은 각각 무엇을 나누는가?
-5. 업무 발생 날짜 대신 적재 날짜로 저장한 이유와 조회 시의 비용은 무엇인가?
-6. Silver에 필요한 필드·중복 기준·잘못된 데이터 처리 기준은 무엇인가?
-
-학습 순서: 코드와 데이터 확인 → 예상 결과 설명 → 직접 실행/SQL 작성 → 반례 검토. Silver 구현은 요구사항을 먼저 정한 뒤 진행한다.
+기존 고정 P0 검증 결과는 최초 29건 적재, 동일 checkpoint 재실행 입력 0건, Kafka/Bronze 29건과 MySQL ID 일치다. 처리 중 장애·다중 노드·대량 부하는 아직 미검증이다. `make smoke`/`make reset`은 볼륨을 초기화하므로 일반 조회에 사용하지 않는다.
