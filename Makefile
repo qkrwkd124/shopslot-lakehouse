@@ -2,12 +2,14 @@ COMPOSE := docker compose
 .DEFAULT_GOAL := up
 
 .PHONY: add-booking
-add-booking:
-	$(COMPOSE) --profile tools run --build --rm generator python add_booking.py
-
 .PHONY: up down reset migrate connector generate-p0 verify-p0 smoke logs ps api
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
+.PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
+.PHONY: silver-events verify-silver-events silver-current
+
+add-booking:
+	$(COMPOSE) --profile tools run --build --rm generator python add_booking.py
 
 thrift-up:
 	$(COMPOSE) up -d --build spark-thrift
@@ -17,8 +19,9 @@ thrift-stop:
 
 thrift-logs:
 	$(COMPOSE) logs --follow --tail=80 spark-thrift
-.PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
-.PHONY: silver-events verify-silver-events
+
+silver-current:
+	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_bookings_current.py
 
 silver-events:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_booking_events.py
