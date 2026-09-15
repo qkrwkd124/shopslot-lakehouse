@@ -1,12 +1,13 @@
-# Silver 변환 명세 — booking_events_clean
+# Silver 변환 명세
 
-2026-09-10. 네 개의 목표 테이블 중 `lakehouse.silver.booking_events_clean` 하나만 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. dbt 이관 및 증분 처리는 후속 계획이며 현재 배치에 포함되지 않는다.
+2026-09-15. 네 개의 목표 테이블 중 `lakehouse.silver.booking_events_clean`과 `lakehouse.silver.bookings_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. dbt 이관 및 증분 처리는 후속 계획이며 현재 배치에 포함되지 않는다.
 
 ## 실행과 저장
 
 ```bash
 make iceberg-up            # spark가 실행 중이면 생략 가능
 make silver-events         # Bronze 전체 snapshot을 읽어 이 Silver 테이블만 재작성 후 종료
+make silver-current        # clean 전체 snapshot을 읽어 예약별 현재 상태를 재작성 후 종료
 make iceberg-sql
 ```
 
@@ -20,6 +21,8 @@ make iceberg-sql
 2. `spark/sql/silver/booking_events_clean.sql`: 유효한 행 → event_id별 순번 → 대표 행 선택.
 3. `spark/jobs/silver_booking_events.py`: SQL을 실행하고 결과를 Iceberg에 저장하는 얇은 실행기.
 4. `spark/jobs/test_silver_booking_events.py`: 원본 저장소를 건드리지 않는 작은 입력 예제.
+5. `spark/sql/silver/bookings_current.sql`: 예약 이벤트에 흩어진 속성과 최신 상태를 예약별 한 행으로 재구성.
+6. `spark/jobs/silver_bookings_current.py`: 입력 snapshot 고정, 중복 검사와 Iceberg 저장을 담당하는 실행기.
 
 `silver_bronze_input`, `silver_event_candidates`, `silver_clean_result`는 해당 SparkSession 안에서만 존재하는 임시 view다. 별도의 영구 Silver 테이블 세 개를 추가한 것이 아니다.
 
@@ -34,10 +37,16 @@ make iceberg-sql
 | booking_id, shop_id, customer_id, service_id, staff_id | BIGINT 식별자. 이벤트에 없는 선택 필드는 NULL |
 | start_at, old_start_at, cancelled_at | 해당 이벤트에 포함된 예약 관련 시각 |
 | booked_price_krw, status | 예약 가격과 상태. 최신 상태를 보충하지 않음 |
-| payment_id, payment_transaction_id, amount_krw, payment_status | 결제·환불 정보 |
+| payment_id, payment_transaction_id, amount_krw, payment_status, refund_type | 결제·환불 정보. `refund_type`은 `payment_refunded`에만 있는 `full`/`partial` 구분이며 다른 이벤트에서는 NULL |
 | payload, kafka_topic/partition/offset, kafka_timestamp, bronze_ingested_at | 원문과 추적 위치 |
 
 `ingest_time`은 payload 값을 변환한 것이며 실제 Kafka 도착 시각을 새로 측정하지 않는다. 현재 P0 generator는 event_time과 같은 값을 넣는다. Kafka timestamp·Bronze 적재 시각과 혼동하지 않는다. 시간 표시 설정은 기존 Asia/Seoul을 사용한다.
+
+## bookings_current 재구성
+
+한 행은 예약 한 건(`booking_id`)이다. 결제 이벤트를 제외한 예약 이벤트 5종에서 최신 상태를 고르고, `booking_created`의 고객·서비스·직원·예약 가격과 `start_at`이 있는 최신 이벤트의 예약 시각을 결합한다. 상태 이벤트만 있고 생성 이벤트가 없으면 행을 버리지 않고 기본 정보는 NULL, `is_orphan=true`로 남긴다.
+
+`event_time` 동률에서는 `bronze_ingested_at`, Kafka topic/partition/offset을 결정론적 tie-breaker로 사용한다. 서로 다른 Kafka partition의 offset을 업무 전역 순서로 해석하지 않는다. 실행기는 `booking_events_clean`의 main snapshot을 고정해 동시 교체가 실행 중 입력을 바꾸지 않게 하고, 예약별 중복과 빈 결과를 검사한 뒤 `CREATE OR REPLACE TABLE`로 결과를 저장한다.
 
 ## 핵심 SQL 개념
 
@@ -55,7 +64,7 @@ make iceberg-sql
 
 유효한 행 중 같은 event_id는 가장 이른 bronze_ingested_at을 우선하고, 동률이면 Kafka topic/partition/offset으로 대표 행을 결정한다. partition 사이 offset을 업무 전역 순서로 해석하지 않는다. 같은 event_id의 유효한 원문 문자열이 다르면 임의 선택 대신 쓰기 전에 실패시킨다. 공백만 다른 JSON도 충돌로 간주하는 보수적인 초기 정책이다.
 
-제외 건수와 사유는 로그에 출력하고 원문은 Bronze에 보존한다. `event_dq` 영구 테이블은 아직 만들지 않았다. UUID 형식, FK 존재, 이벤트별 상태 전이, 선택 ID의 양수 여부 등 모든 업무 계약을 검증한 것은 아니다. 알 수 없는 추가 필드는 컬럼으로 펼치지 않고 payload에 남는다. v2 지원·JSON 의미 기반 충돌 판단·격리 테이블은 후속 과제다.
+`refund_type`은 값 검증 없이 문자열 그대로 전달한다. 제외 건수와 사유는 로그에 출력하고 원문은 Bronze에 보존한다. `event_dq` 영구 테이블은 아직 만들지 않았다. UUID 형식, FK 존재, 이벤트별 상태 전이, 선택 ID의 양수 여부 등 모든 업무 계약을 검증한 것은 아니다. 알 수 없는 추가 필드는 컬럼으로 펼치지 않고 payload에 남는다. v2 지원·JSON 의미 기반 충돌 판단·격리 테이블은 후속 과제다.
 
 ## 재실행 방식
 

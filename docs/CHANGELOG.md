@@ -1,5 +1,29 @@
 # Change log
 
+## 2026-09-15 — bookings_current 상태 재구성 추가
+
+- `booking_events_clean`의 예약 이벤트 5종을 결합해 예약 한 건당 한 행인 `lakehouse.silver.bookings_current`를 생성하는 full-refresh Silver 배치를 추가했다.
+- 최신 예약 상태, 최초 `booking_created`의 기본 정보, 최신 `start_at`을 각각 선택한 뒤 결합한다. 결제 이벤트는 제외하고 생성 이벤트가 없는 예약은 삭제하지 않고 `is_orphan`으로 표시한다.
+- 실행 시작 시 입력 `booking_events_clean` snapshot을 고정하며, 빈 결과와 `booking_id` 중복을 검사한 뒤 Iceberg 테이블을 원자적으로 교체한다.
+- `make silver-current` 실행 명령을 추가했다.
+
+## 2026-09-14 — 예약·결제 상태 기계 분리 명시
+
+- 설계서의 상태 기계 그림이 예약 전이도에 결제 이벤트를 이어 붙여 `checked_in → payment_completed → payment_refunded`로 그려져 있었다. 예약 상태가 수납완료로 전이되는 것처럼 읽히지만 실제 구현은 그렇지 않다. 예약과 결제의 상태 기계를 분리해 다시 그렸다.
+- 코드 확인 결과 `complete_payments`와 `refund_payments`는 `bookings` 테이블을 UPDATE하지 않는다. `bookings.status`가 가질 수 있는 값은 `scheduled`, `rescheduled`, `checked_in`, `cancelled`, `no_show` 다섯 개뿐이다. 데이터는 정상이며 그림만 틀렸다.
+- `no_show_marked`가 `rescheduled` 아래에만 달려 있었으나 실제로는 `scheduled`에서 바로 전이된다(P0 예약 8번). 상태값과 event_type 이름이 섞여 있던 것도 상태값으로 통일했다.
+- `SEED=42` 고정 난수 서술을 실제 구현(난수 없이 `uuid5` 기반 결정론적 생성)으로 정정하고, Zipf 매장 분포는 P3 계획임을 구분했다.
+- `status = 'rescheduled'`를 알려진 문제로 기록했다. 일정 변경은 사건이지 현재 조건이 아니므로 `scheduled`만 세는 집계에서 누락되고 Gold funnel 분모가 틀어진다. P0에서는 해당 예약이 체크인으로 끝나 드러나지 않는다. 개선 방향만 적었고 적용하지 않았다.
+- 문서 변경만 수행했다. 실행 코드와 데이터는 바꾸지 않았다.
+
+## 2026-09-14 — 이벤트 계약 문서 정정과 refund_type 편입
+
+- 설계서의 이벤트 계약 절이 실제 payload와 달랐다. `payment_completed` 예시가 `customer_id`, `service_id`, `start_at`, `booked_price_krw`, `status`를 담고 있었으나 구현에는 없는 필드다. event_type별 필드 표와 실제 payload 두 건으로 교체했다.
+- generator가 `payment_refunded`에 기록하던 `refund_type`(`full`/`partial`)이 계약 문서에 없었고 Silver의 `from_json` 구조체에도 없어 조용히 버려지고 있었다. 환불 이벤트에는 `booked_price_krw`가 없어 `amount_krw`만으로 부분·전액을 판별할 수 없으므로 계약에 편입하고 `booking_events_clean` 컬럼으로 펼친다.
+- `payment_status`, `staff_id`도 계약 문서에 누락돼 있어 함께 반영했다. 예약 정보와 결제 정보가 한 이벤트에 함께 오지 않는다는 점을 명시했다. `bookings_current`가 최신 상태 이벤트만으로 만들어질 수 없는 이유가 여기서 나온다.
+- `refund_type`은 값 검증 없이 문자열로 전달한다. 기존 검증 규칙과 제외 사유는 바꾸지 않았다.
+- 검증: 아직 실행하지 않았다. Silver 컬럼이 하나 늘었으므로 `make silver-events` 재실행이 필요하며, 기존 29건과 event_type별 건수가 유지되는지 확인해야 한다.
+
 ## 2026-09-14 — 공개 기술 문서 정리
 
 - 공개 문서를 실행 가이드, 변환 명세, 검증 결과, 기술적 한계 및 변경 기록으로 정리했다.
