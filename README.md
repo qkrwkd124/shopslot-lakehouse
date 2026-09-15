@@ -162,11 +162,12 @@ checkpoint는 `spark-checkpoints` 볼륨의 `/opt/spark/checkpoints/booking-even
 ## Silver 이벤트 정제 (full-refresh 배치)
 
 ```bash
-make silver-events         # 기존 spark에서 booking_events_clean 전체 재계산·교체 후 종료
-make verify-silver-events  # 작은 SQL 테스트 후 동일한 테이블 재계산·교체 (읽기 전용 아님)
+make silver-events-clean   # Bronze에서 공통 events_clean 전체 재계산·교체 후 종료
+make silver-events         # events_clean에서 예약 전용 booking_events_clean 재계산·교체
+make silver-current        # booking_events_clean에서 bookings_current 재계산·교체 후 종료
 ```
 
-`lakehouse.silver.booking_events_clean` 하나만 만들며 Bronze 원문은 보존한다. 기존 Bronze snapshot에서 JSON을 펼치고 v1 기본 검증·event_id 중복 제거를 수행한다. 새 컨테이너나 streaming checkpoint는 추가하지 않는다. SQL과 실행기를 분리했으며, 현재 실행 엔진은 Spark이고 dbt는 아직 도입하지 않았다. 다음 세 테이블과 dbt 이관은 후속 작업이다. 상세 규칙·한계·조회 SQL은 [Silver 변환 명세](docs/SILVER_GUIDE.md)를 참고한다.
+`lakehouse.silver.events_clean`은 Bronze의 고정 snapshot에서 공통 envelope를 타입화하고 `event_id` 중복을 제거한 논리 이벤트 경계다. 예약·결제 전용 필드는 펼치지 않고 payload에 보존한다. `booking_events_clean`은 이 테이블에서 예약 lifecycle 5종만 선택해 예약 payload를 타입화하고 이벤트별 필수값과 상태를 검증한다. `bookings_current`는 정제된 예약 이벤트를 예약별 현재 상태로 재구성한다. 결제 거래 clean과 current는 후속 작업이다. 새 컨테이너나 streaming checkpoint는 추가하지 않으며 현재 실행 엔진은 Spark이고 dbt는 아직 도입하지 않았다. 상세 규칙·한계·조회 SQL은 [Silver 변환 명세](docs/SILVER_GUIDE.md)를 참고한다.
 
 ## DBeaver에서 Spark SQL 실행
 

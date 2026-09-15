@@ -6,7 +6,7 @@ COMPOSE := docker compose
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
 .PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
-.PHONY: silver-events verify-silver-events silver-current
+.PHONY: silver-events-clean silver-events silver-current
 
 add-booking:
 	$(COMPOSE) --profile tools run --build --rm generator python add_booking.py
@@ -20,14 +20,14 @@ thrift-stop:
 thrift-logs:
 	$(COMPOSE) logs --follow --tail=80 spark-thrift
 
+silver-events-clean:
+	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_events_clean.py
+
 silver-current:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_bookings_current.py
 
 silver-events:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_booking_events.py
-
-verify-silver-events:
-	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_booking_events.py --self-test
 
 bronze-once:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/bronze_stream.py --available-now

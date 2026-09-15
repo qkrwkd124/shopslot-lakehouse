@@ -1,5 +1,20 @@
 # Change log
 
+## 2026-09-15 — booking_events_clean 예약 도메인 분리
+
+- `booking_events_clean` 입력을 Bronze에서 공통 `events_clean`로 전환하고 예약 lifecycle 5종만 남겼다. 결제·환불 컬럼과 공통 event_id 중복 제거 책임을 제거했다.
+- 예약 payload의 customer/service/staff/start 시각/가격/status만 타입화하고 이벤트 종류별 필수 필드와 상태값을 검증한다. `NULL <> 값`이 참이 되지 않는 SQL 3값 논리를 고려해 상태 NULL을 명시적으로 거부한다.
+- 공통 파싱·중복·payload 충돌 fixture와 `verify-silver-events`를 제거했다. 이 규칙은 `events_clean` 책임이며 후속 dbt 테스트에서 공통 계약과 예약 계약을 분리한다.
+- 검증: events_clean 30건에서 예약 이벤트 21건을 선택해 제외 0건으로 저장했다. 이어서 bookings_current를 재생성해 예약 11건, orphan 0건, 상태 `checked_in 7 / cancelled 1 / no_show 1 / scheduled 2`를 확인했다.
+
+## 2026-09-15 — 공통 events_clean 경계 추가
+
+- `lakehouse.bronze.booking_events`의 고정 snapshot을 읽어 공통 envelope만 타입화하고 `event_id` 중복을 제거하는 `lakehouse.silver.events_clean` full-refresh 배치를 추가했다.
+- 예약·결제 전용 필드는 펼치지 않고 payload에 보존하며, Kafka key/topic/partition/offset/timestamp/headers와 Bronze 적재 시각을 lineage로 유지한다.
+- 동일 `event_id`의 payload가 충돌하면 기존 테이블을 교체하지 않고 실패한다. 저장 후 전체 행 재비교는 생략하고 저장 전 빈 결과와 충돌을 검사한다.
+- `make silver-events-clean`을 추가했다. 기존 wide `booking_events_clean`과 `bookings_current`의 입력 전환은 다음 작업으로 남겨 단계적 리팩터링임을 문서에 명시했다.
+- 검증: Bronze snapshot `502242981853940174`의 30건을 읽어 제외 0건, 중복 제거 0건, `events_clean` 30건을 저장했다. 저장 결과의 event_id 30개가 모두 고유하고 Iceberg main snapshot이 생성된 것을 확인했다.
+
 ## 2026-09-15 — bookings_current 상태 재구성 추가
 
 - `booking_events_clean`의 예약 이벤트 5종을 결합해 예약 한 건당 한 행인 `lakehouse.silver.bookings_current`를 생성하는 full-refresh Silver 배치를 추가했다.
