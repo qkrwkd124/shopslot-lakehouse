@@ -1,4 +1,4 @@
-"""One learning model: batch/full-refresh booking_events_clean -> bookings_current."""
+"""Rebuild one current-state row per booking from typed booking events."""
 from pathlib import Path
 
 from pyspark.sql import SparkSession
@@ -12,8 +12,8 @@ def main():
     spark = SparkSession.builder.appName("shopslot-silver-bookings-current").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     try:
-        # Freeze one input snapshot so a concurrent silver-events replace cannot
-        # swap the table underneath this run.
+        # Freeze one input snapshot so a concurrent booking-events refresh cannot
+        # change this run's input halfway through the computation.
         snapshot = spark.sql(f"SELECT snapshot_id FROM {SOURCE}.refs WHERE name = 'main'").first()
         if snapshot is None:
             raise RuntimeError("booking_events_clean has no committed snapshot; run make silver-events first.")
@@ -23,16 +23,22 @@ def main():
         input_count = source.count()
         if not input_count:
             raise RuntimeError("booking_events_clean is empty; refusing to replace bookings_current.")
+        source_booking_count = source.select("booking_id").distinct().count()
 
         currents = spark.sql((SQL_DIR / "bookings_current.sql").read_text()).cache()
         try:
             output_count = currents.count()
             if not output_count:
                 raise RuntimeError("No booking events resolved to a current row; existing table is preserved.")
-            # A booking must not appear twice; the join must not fan out.
+            # Current-table grain is exactly one row per booking_id. Checking both
+            # uniqueness and coverage catches join fan-out as well as missing rows.
             duplicates = currents.groupBy("booking_id").count().filter("count > 1")
             if duplicates.limit(1).count():
                 raise RuntimeError("bookings_current produced more than one row for a booking_id.")
+            if output_count != source_booking_count:
+                raise RuntimeError(
+                    "bookings_current does not cover every booking_id from booking_events_clean."
+                )
             currents.createOrReplaceTempView("silver_bookings_current_result")
 
             spark.sql("CREATE NAMESPACE IF NOT EXISTS lakehouse.silver")
@@ -42,14 +48,13 @@ def main():
                 TBLPROPERTIES ('format-version'='2', 'write.format.default'='parquet')
                 AS SELECT * FROM silver_bookings_current_result
             """)
-            stored = spark.table(TARGET)
-            if currents.exceptAll(stored).limit(1).count() or stored.exceptAll(currents).limit(1).count():
-                raise RuntimeError("Stored bookings_current differs from the computed result.")
 
-            orphans = stored.filter("is_orphan").count()
-            print(f"bookings_current verified: snapshot={snapshot.snapshot_id}, "
+            # Orphans remain queryable instead of making the whole batch fail.
+            # A later event_dq model will persist and alert on this count.
+            orphans = currents.filter("is_orphan").count()
+            print(f"bookings_current written: snapshot={snapshot.snapshot_id}, "
                   f"events={input_count}, bookings={output_count}, orphans={orphans}", flush=True)
-            stored.groupBy("status").count().orderBy("status").show(truncate=False)
+            currents.groupBy("status").count().orderBy("status").show(truncate=False)
         finally:
             currents.unpersist()
     finally:

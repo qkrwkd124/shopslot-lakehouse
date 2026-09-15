@@ -1,5 +1,11 @@
 # Change log
 
+## 2026-09-15 — bookings_current를 예약 clean 경계에 맞게 정리
+
+- `booking_events_clean`이 예약 lifecycle 이벤트만 보장하므로 current SQL의 이벤트 종류 재필터링을 제거하고, 생성 속성·최신 일정·최신 상태를 결합하는 책임만 남겼다.
+- 저장 후 전체 결과를 양방향 `exceptAll`로 재조회하던 검증을 제거했다. 대신 저장 전에 `booking_id` 유일성과 입력의 고유 예약 수 대비 출력 예약 수를 검사해 current grain의 중복·누락을 짧게 확인한다.
+- orphan은 데이터 유실을 피하기 위해 행과 실행 요약에 계속 남긴다. 영구 품질 이력과 알림은 후속 `event_dq` 책임으로 분리한다.
+
 ## 2026-09-15 — booking_events_clean 예약 도메인 분리
 
 - `booking_events_clean` 입력을 Bronze에서 공통 `events_clean`로 전환하고 예약 lifecycle 5종만 남겼다. 결제·환불 컬럼과 공통 event_id 중복 제거 책임을 제거했다.

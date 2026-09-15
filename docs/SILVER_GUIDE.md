@@ -56,7 +56,9 @@ make iceberg-sql
 
 한 행은 예약 한 건(`booking_id`)이다. 결제 이벤트를 제외한 예약 이벤트 5종에서 최신 상태를 고르고, `booking_created`의 고객·서비스·직원·예약 가격과 `start_at`이 있는 최신 이벤트의 예약 시각을 결합한다. 상태 이벤트만 있고 생성 이벤트가 없으면 행을 버리지 않고 기본 정보는 NULL, `is_orphan=true`로 남긴다.
 
-`event_time` 동률에서는 `bronze_ingested_at`, Kafka topic/partition/offset을 결정론적 tie-breaker로 사용한다. 서로 다른 Kafka partition의 offset을 업무 전역 순서로 해석하지 않는다. 실행기는 `booking_events_clean`의 main snapshot을 고정해 동시 교체가 실행 중 입력을 바꾸지 않게 하고, 예약별 중복과 빈 결과를 검사한 뒤 `CREATE OR REPLACE TABLE`로 결과를 저장한다.
+`event_time` 동률에서는 `bronze_ingested_at`, Kafka topic/partition/offset을 결정론적 tie-breaker로 사용한다. 서로 다른 Kafka partition의 offset을 업무 전역 순서로 해석하지 않는다. 실행기는 `booking_events_clean`의 main snapshot을 고정해 동시 교체가 실행 중 입력을 바꾸지 않게 한다. 저장 전 빈 결과, `booking_id` 유일성, 입력의 고유 booking_id가 결과에 모두 포함됐는지를 검사한 뒤 `CREATE OR REPLACE TABLE`로 결과를 저장한다.
+
+현재 모델은 upstream 예약 clean의 이벤트 종류와 필드 검증을 신뢰하고 같은 검증을 반복하지 않는다. 저장 후 전체 행을 `exceptAll`로 다시 비교하지도 않는다. Iceberg 쓰기 자체의 성공 여부는 Spark 명령의 예외로 판단하고, current 단계에서는 새 grain과 상태 재구성에서 생길 수 있는 누락·join fan-out만 검사한다. orphan은 배치를 실패시키지 않고 `is_orphan=true`와 실행 로그 건수로 남기며, 영구 이력과 알림은 후속 `event_dq`에서 담당한다.
 
 ## 핵심 SQL 개념
 

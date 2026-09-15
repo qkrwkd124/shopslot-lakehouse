@@ -1,12 +1,8 @@
--- 예약 1건 = 1행. 이벤트 스트림에 흩어진 delta를 합쳐 MySQL bookings 한 행을 재구성한다.
--- 결제 이벤트는 예약 상태를 바꾸지 않으므로 제외한다. 수납·환불은 payments_current의 책임이다.
+-- 예약 1건 = 1행. 예약 이벤트에 흩어진 delta를 합쳐 MySQL bookings 한 행을 재구성한다.
+-- upstream booking_events_clean이 예약 lifecycle 5종과 도메인 계약을 이미 보장한다.
 WITH booking_events AS (
     SELECT *
     FROM silver_booking_events_clean
-    WHERE event_type IN (
-        'booking_created', 'booking_rescheduled', 'booking_cancelled',
-        'checked_in', 'no_show_marked'
-    )
 ),
 -- 예약 상태를 바꾸는 이벤트 중 가장 나중 것. cancelled_at도 이 행에 딸려온다.
 -- event_time 동률은 업무 순서로 판단할 수 없다. 뒤의 컬럼들은 결정론 확보용 tie-breaker이며
