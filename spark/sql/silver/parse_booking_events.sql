@@ -8,6 +8,7 @@ WITH parsed AS (
         start_at: STRING, old_start_at: STRING, cancelled_at: STRING,
         booked_price_krw: STRING, status: STRING, payment_status: STRING,
         payment_id: STRING, payment_transaction_id: STRING, amount_krw: STRING,
+        refund_type: STRING,
         _corrupt_record: STRING
     >', map('mode', 'PERMISSIVE', 'columnNameOfCorruptRecord', '_corrupt_record')) AS event
     FROM silver_bronze_input
@@ -30,6 +31,8 @@ WITH parsed AS (
         try_cast(event.payment_id AS BIGINT) AS payment_id,
         try_cast(event.payment_transaction_id AS BIGINT) AS payment_transaction_id,
         try_cast(event.amount_krw AS BIGINT) AS amount_krw,
+        -- 환불 이벤트에는 booked_price_krw가 없어 금액만으로 부분/전액을 판별할 수 없다.
+        event.refund_type AS refund_type,
         payload, kafka_topic, kafka_partition, kafka_offset,
         kafka_timestamp, bronze_ingested_at,
         event IS NULL OR event._corrupt_record IS NOT NULL AS malformed_json,
