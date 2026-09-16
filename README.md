@@ -25,9 +25,11 @@ cp .env.example .env
 make smoke
 ```
 
-`make smoke`는 로컬 볼륨을 초기화하고 Compose stack과 Debezium connector를 기동한 뒤, 예약 10건의 lifecycle 데이터를 생성해 MySQL과 Kafka의 상태·이벤트 계약을 검증한다.
+`make smoke`는 로컬 볼륨을 초기화하고 Compose stack과 Debezium connector를 기동한 뒤, 예약 10건의 lifecycle 데이터를 생성한다. `verify_p0.sh`는 MySQL 결제 요약과 거래 합계의 일치, Outbox에서 Kafka까지의 전달을 확인하는 전체 흐름 smoke test다. 스키마 구조와 Silver 도메인 검증을 반복하지 않는다.
 
-고정 P0 데이터셋은 예약 10건, 결제 7건, 결제 거래 9건과 총 29개의 outbox/Kafka 이벤트로 구성한다. 이벤트 분포는 `booking_created` 10건, `booking_rescheduled` 1건, `booking_cancelled` 1건, `checked_in` 7건, `no_show_marked` 1건, `payment_completed` 7건, `payment_refunded` 2건이다. 환불은 20,000원 부분 환불과 55,000원 전액 환불을 각각 한 건 포함한다.
+고정 P0 데이터셋은 예약 10건, 결제 7건, 결제 거래 13건과 총 40개의 outbox/Kafka 이벤트로 구성한다. 이벤트 분포는 `booking_created` 10건, `booking_rescheduled` 1건, `booking_cancelled` 1건, `checked_in` 7건, `no_show_marked` 1건, `payment_requested` 7건, `payment_completed` 9건, `payment_refunded` 4건이다. 최초 부분수납, 일반 부분·전액 환불, 재수납이 필요한 부분·전액 환불, 완전·부분 재수납을 구분한다.
+
+`payments`는 거래 원장을 대신하지 않는 현재 요약이다. `payout_amount_krw`와 `refund_amount_krw`는 누적 수납·환불, `paid_amount_krw = payout_amount_krw - refund_amount_krw`는 순수납액이다. 일반 환불은 `unpaid_amount_krw=0`인 부분·전액 환불로 끝나며, `needs_repayment=true`인 환불만 청구액과 순수납액의 차이를 실제 미수로 유지한다. 각 거래와 결제 요약 갱신, outbox 기록은 하나의 MySQL 트랜잭션에서 수행한다.
 
 새 MySQL 볼륨에서는 Compose의 `migrate` 서비스가 `alembic upgrade head`를 실행해 P0 원본 테이블을 생성한다. `mysql/init/001_bootstrap.sql`은 Debezium 복제 계정만 만든다. 예전 SQL 초기화로 만든 로컬 볼륨은 `make reset` 후 다시 시작해야 한다.
 
@@ -75,7 +77,7 @@ SELECT * FROM lakehouse.bronze.booking_events
 WHERE get_json_object(payload, '$.event_id') = '<event_id>';
 ```
 
-신규 이벤트 1건만 한 번 정상 전달·적용됐다면 Bronze는 29→30건이 된다. 새 snapshot은 MySQL commit 시점이 아니라 Bronze commit 후 만들어진다. `make silver-events`를 수동 실행하면 clean도 재계산된다. 기존 데이터를 유지하려면 `make smoke` / `make reset`을 사용하지 않는다. 고정 29건을 전제로 하는 `verify-p0`는 추가 후 기대값이 맞지 않으므로 추가 실험과 고정 P0 검증을 구분한다.
+신규 이벤트 1건만 한 번 정상 전달·적용됐다면 Bronze는 40→41건이 된다. 새 snapshot은 MySQL commit 시점이 아니라 Bronze commit 후 만들어진다. `make silver-events-clean`과 해당 도메인 clean을 수동 실행하면 Silver도 재계산된다. 기존 데이터를 유지하려면 `make smoke` / `make reset`을 사용하지 않는다. 고정 40건을 전제로 하는 `verify-p0`는 추가 후 기대값이 맞지 않으므로 추가 실험과 고정 P0 검증을 구분한다.
 
 ### 접속 주소
 
@@ -165,9 +167,10 @@ checkpoint는 `spark-checkpoints` 볼륨의 `/opt/spark/checkpoints/booking-even
 make silver-events-clean   # Bronze에서 공통 events_clean 전체 재계산·교체 후 종료
 make silver-events         # events_clean에서 예약 전용 booking_events_clean 재계산·교체
 make silver-current        # booking_events_clean에서 bookings_current 재계산·교체 후 종료
+make silver-payment-transactions # events_clean에서 결제 거래 clean 재계산·교체
 ```
 
-`lakehouse.silver.events_clean`은 Bronze의 고정 snapshot에서 공통 envelope를 타입화하고 `event_id` 중복을 제거한 논리 이벤트 경계다. 예약·결제 전용 필드는 펼치지 않고 payload에 보존한다. `booking_events_clean`은 이 테이블에서 예약 lifecycle 5종만 선택해 예약 payload를 타입화하고 이벤트별 필수값과 상태를 검증한다. `bookings_current`는 정제된 예약 이벤트를 예약별 현재 상태로 재구성한다. 결제 거래 clean과 current는 후속 작업이다. 새 컨테이너나 streaming checkpoint는 추가하지 않으며 현재 실행 엔진은 Spark이고 dbt는 아직 도입하지 않았다. 상세 규칙·한계·조회 SQL은 [Silver 변환 명세](docs/SILVER_GUIDE.md)를 참고한다.
+`lakehouse.silver.events_clean`은 Bronze의 고정 snapshot에서 공통 envelope를 타입화하고 `event_id` 중복을 제거한 논리 이벤트 경계다. 예약·결제 전용 필드는 펼치지 않고 payload에 보존한다. `booking_events_clean`은 예약 lifecycle 5종을, `payment_transactions_clean`은 수납·환불 거래를 각각 타입화하고 도메인 계약을 검증한다. `bookings_current`는 정제된 예약 이벤트를 예약별 현재 상태로 재구성하며 결제 current는 후속 작업이다. 새 컨테이너나 streaming checkpoint는 추가하지 않으며 현재 실행 엔진은 Spark이고 dbt는 아직 도입하지 않았다. 상세 규칙·한계·조회 SQL은 [Silver 변환 명세](docs/SILVER_GUIDE.md)를 참고한다.
 
 ## DBeaver에서 Spark SQL 실행
 

@@ -1,14 +1,15 @@
 # Silver 변환 명세
 
-2026-09-15. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 예약 상태 `bookings_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. 결제 거래 clean/current, dbt 이관 및 증분 처리는 후속 계획이다.
+2026-09-15. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 거래 `payment_transactions_clean`, 예약 상태 `bookings_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. 결제 current, dbt 이관 및 증분 처리는 후속 계획이다.
 
 ## 실행과 저장
 
 ```bash
 make iceberg-up            # spark가 실행 중이면 생략 가능
 make silver-events-clean   # Bronze 전체 snapshot에서 공통 논리 이벤트를 재작성
-make silver-events         # Bronze 전체 snapshot을 읽어 이 Silver 테이블만 재작성 후 종료
+make silver-events         # events_clean에서 예약 이벤트 clean을 재작성
 make silver-current        # clean 전체 snapshot을 읽어 예약별 현재 상태를 재작성 후 종료
+make silver-payment-transactions # events_clean에서 결제 거래 clean을 재작성
 make iceberg-sql
 ```
 
@@ -26,8 +27,11 @@ make iceberg-sql
 6. `spark/jobs/silver_booking_events.py`: `events_clean` snapshot을 고정하고 예약 clean을 저장.
 7. `spark/sql/silver/bookings_current.sql`: 예약 이벤트에 흩어진 속성과 최신 상태를 예약별 한 행으로 재구성.
 8. `spark/jobs/silver_bookings_current.py`: 입력 snapshot 고정, 중복 검사와 Iceberg 저장을 담당하는 실행기.
+9. `spark/sql/silver/parse_payment_transactions.sql`: 결제 이벤트 2종 필터링, payload 타입화와 거래 계약 검증.
+10. `spark/sql/silver/payment_transactions_clean.sql`: 유효한 수납·환불 거래 컬럼 선택.
+11. `spark/jobs/silver_payment_transactions.py`: 입력 snapshot과 거래 ID grain을 검사하고 결제 거래 clean을 저장.
 
-`silver_bronze_input`, `silver_event_candidates`, `silver_clean_result`, `silver_events_clean_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
+`silver_bronze_input`, `silver_events_input`, `silver_event_candidates`, `silver_booking_event_candidates`, `silver_payment_transaction_candidates`와 각 `*_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
 
 ## events_clean 공통 경계
 
@@ -60,6 +64,16 @@ make iceberg-sql
 
 현재 모델은 upstream 예약 clean의 이벤트 종류와 필드 검증을 신뢰하고 같은 검증을 반복하지 않는다. 저장 후 전체 행을 `exceptAll`로 다시 비교하지도 않는다. Iceberg 쓰기 자체의 성공 여부는 Spark 명령의 예외로 판단하고, current 단계에서는 새 grain과 상태 재구성에서 생길 수 있는 누락·join fan-out만 검사한다. orphan은 배치를 실패시키지 않고 `is_orphan=true`와 실행 로그 건수로 남기며, 영구 이력과 알림은 후속 `event_dq`에서 담당한다.
 
+## payment_transactions_clean 한 행의 의미와 컬럼
+
+한 행은 실제 수납 또는 환불 거래 하나(`payment_transaction_id`)다. `payment_completed`는 `transaction_type=payment`, `payment_refunded`는 `transaction_type=refund`로 정규화한다. `payment_id`는 여러 거래를 하나의 결제 상태로 묶는 키이고, `booking_id`는 예약과 연결하는 키다. `request_amount_krw`는 결제의 고정 요청 금액이며 `amount_krw`는 이번 거래에서 움직인 금액이다.
+
+양수 payment/payment_transaction ID, 요청 금액과 거래 금액을 요구하며 한 번의 거래 금액은 요청 금액을 넘을 수 없다. 같은 payment_id의 요청 금액이 이벤트마다 다르거나 서로 다른 event_id가 같은 거래 ID를 사용하면 기존 테이블을 교체하지 않고 실패한다. 제외 행의 영구 격리는 후속 `event_quarantine`에서 담당한다.
+
+MySQL `payments`는 append-only 거래의 현재 요약이다. `payout_amount_krw`와 `refund_amount_krw`는 누적 수납·환불이고 `paid_amount_krw`는 둘의 차이인 순수납액이다. `unpaid_amount_krw`는 실제로 다시 받을 금액이며 일반 환불에서는 0, `needs_repayment=true`인 환불에서는 청구액과 순수납액의 차이다. `payment_transactions`가 거래 원장이고 Silver `payments_current`는 이벤트 순서와 이 요약 필드로 현재 상태를 재구성할 예정이다.
+
+현재 `payment_transactions_clean` parser는 이전 결제 상태 조합을 기준으로 작성돼 있다. 새 payload의 누적 금액·미수·재수납 필드와 `payment_requested`를 반영하는 작업 및 새 40건 계약의 end-to-end 검증은 다음 단계다.
+
 ## 핵심 SQL 개념
 
 - `WITH`: 중간 SELECT에 이름을 붙여 파싱·변환·정제 단계를 읽기 쉽게 나눈다.
@@ -91,6 +105,10 @@ SELECT event_id, booking_id, event_type, event_time
 FROM lakehouse.silver.booking_events_clean
 ORDER BY booking_id, event_time;
 
+SELECT payment_transaction_id, payment_id, transaction_type, amount_krw
+FROM lakehouse.silver.payment_transactions_clean
+ORDER BY payment_id, occurred_at;
+
 SELECT event_type, count(*)
 FROM lakehouse.silver.booking_events_clean GROUP BY event_type;
 
@@ -117,6 +135,19 @@ SELECT file_path, record_count FROM lakehouse.silver.booking_events_clean.files;
 6. **규모별 비용 비교:** 작은 데이터에서 시작해 규모를 단계적으로 늘린다. 각 규모에서 같은 신규 이벤트 집합을 두 방식에 적용하고, Spark 자원·캐시 조건을 맞춰 소요 시간, 읽기/쓰기 bytes·records, 생성 파일 수를 기록한다. 증분 처리도 대상 테이블 조회·파일 재작성 비용이 있으므로 신규 입력만큼만 비용이 든다고 가정하지 않는다.
 
 측정 결과는 입력 snapshot, 전체/신규 건수, 자원·캐시 조건, 처리 방식, 소요 시간, I/O, 결과 일치 여부와 함께 기록한다. 측정 전부터 증분 방식이 몇 배 빠르다고 주장하지 않는다. full refresh 기준 버전은 증분 구현의 정확성을 검증하는 비교 대상으로 유지한다.
+
+### 이벤트 스키마 진화와 Schema Registry 실험 계획
+
+현재 plain JSON 이벤트의 `schema_version=1`을 애플리케이션과 Silver가 수동으로 관리한다. 후속 실험에서는 Schema Registry에 JSON Schema 또는 Avro/Protobuf 계약을 등록하고 호환성 정책을 적용한다. 완료된 구현이 아니며 도구 도입 자체보다 운영 중 계약 전환과 과거 이벤트 재처리를 검증하는 것이 목적이다.
+
+1. **v2 계약 정의:** 필드의 추가·삭제·타입 및 의미 변경을 구분하고, 하위 호환 변경인지 새로운 버전이 필요한 변경인지 결정한다.
+2. **소비자 선배포:** Silver가 `v1`과 `v2`를 각각 해석한 뒤 하나의 표준 clean 스키마로 정규화하도록 먼저 배포한다. 전체 Silver job을 버전별로 복제하지 않고 버전별 parser를 경계로 분리한다.
+3. **생산자 전환:** 애플리케이션의 신규 발행을 `v2`로 전환하고, 전환 기간에는 버전별 입력·제외 건수와 오류를 관찰한다.
+4. **호환성 검증:** 호환되는 변경은 등록되는지, 필수 필드 삭제나 비호환 타입 변경은 Registry 정책에 따라 거부되는지 확인한다.
+5. **재처리와 격리:** 신규 `v1` 발행이 끝나도 Bronze의 과거 `v1`과 새 `v2`를 함께 full refresh해 같은 표준 결과를 만드는지 검증한다. 알 수 없는 버전과 계약 위반 이벤트는 `event_quarantine`으로 분리한다.
+6. **폐기 기준:** Kafka retention만 보고 `v1` parser를 제거하지 않는다. Bronze 재처리 기간, 보존 정책, 변환 완료 여부를 기준으로 지원 종료 조건을 문서화한다.
+
+버전은 애플리케이션 배포마다 올리지 않는다. 기존 소비자가 안전하게 처리할 수 없는 구조 또는 업무 의미 변경에 사용하며, Registry의 구조 호환성 검사와 Silver의 업무 의미 변환을 별도 책임으로 유지한다.
 
 ### bookings_current 구현 범위
 

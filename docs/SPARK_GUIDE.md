@@ -11,7 +11,7 @@
 - MinIO: S3 API로 접근하는 실제 파일 저장소. Parquet 데이터와 Iceberg metadata 파일을 저장한다.
 - Bronze: 원본 보존 계층. 이번 구현은 원문 외에 Kafka 위치와 적재 시각을 붙인다. 업무 정제·중복 제거·최신 상태·집계는 후속 Silver/Gold의 책임이다.
 
-Spark는 단순 파일 적재에 필수는 아니다. 이 프로젝트에서는 Iceberg 스트리밍 적재와 checkpoint, 향후 대량 backfill을 같은 엔진으로 처리하기 위해 사용한다. 29건 처리에 필요한 최소 구성이라고 주장하지 않는다.
+Spark는 단순 파일 적재에 필수는 아니다. 이 프로젝트에서는 Iceberg 스트리밍 적재와 checkpoint, 향후 대량 backfill을 같은 엔진으로 처리하기 위해 사용한다. 현재 40건 P0 처리에 필요한 최소 구성이라고 주장하지 않는다.
 
 ## 2. local[2]와 다중 노드
 
@@ -88,7 +88,7 @@ TBLPROPERTIES ('format-version'='2', 'write.format.default'='parquet');
 | `includeHeaders` | `true` | headers 컬럼도 읽음 |
 | `maxOffsetsPerTrigger` | `10000` | trigger당 처리 offset 수의 상한. 전체 topic/partition에 걸친 한도이며 partition마다 1만 개가 아님 |
 
-1만 건이 모여야 시작하는 옵션이 아니다. 29건만 있으면 그만큼 처리한다. Kafka retention으로 지워진 데이터는 `earliest`로 복구할 수 없다. 기존 checkpoint를 사용하는 재실행은 저장된 offset에서 재개하며 매번 처음부터 읽지 않는다. 실제 지속 실행 여부는 뒤의 trigger가 결정한다.
+1만 건이 모여야 시작하는 옵션이 아니다. 40건만 있으면 그만큼 처리한다. Kafka retention으로 지워진 데이터는 `earliest`로 복구할 수 없다. 기존 checkpoint를 사용하는 재실행은 저장된 offset에서 재개하며 매번 처음부터 읽지 않는다. 실제 지속 실행 여부는 뒤의 trigger가 결정한다.
 
 [Spark 3.5.6 Kafka integration](https://spark.apache.org/docs/3.5.6/structured-streaming-kafka-integration.html).
 
@@ -175,4 +175,4 @@ FROM lakehouse.bronze.booking_events.files;
 
 `.snapshots`, `.files`는 Iceberg가 제공하는 metadata table 조회다. 업무 테이블 이름 전체에 임의로 점을 붙인 것이 아니다. MinIO Console의 `warehouse` bucket에서도 파일을 확인할 수 있다. 계속 수신하려면 `make bronze-up`으로 시작한다.
 
-기존 고정 P0 검증 결과는 최초 29건 적재, 동일 checkpoint 재실행 입력 0건, Kafka/Bronze 29건과 MySQL ID 일치다. 처리 중 장애·다중 노드·대량 부하는 아직 미검증이다. `make smoke`/`make reset`은 볼륨을 초기화하므로 일반 조회에 사용하지 않는다.
+이전 계약의 고정 P0 검증 결과는 최초 29건 적재, 동일 checkpoint 재실행 입력 0건, Kafka/Bronze 29건과 MySQL ID 일치다. 결제 요청·미수·일반 환불·재수납 필요 환불을 포함해 40건으로 바뀐 현재 계약은 새 스키마에서 재검증해야 한다. 처리 중 장애·다중 노드·대량 부하는 아직 미검증이다. `make smoke`/`make reset`은 볼륨을 초기화하므로 일반 조회에 사용하지 않는다.

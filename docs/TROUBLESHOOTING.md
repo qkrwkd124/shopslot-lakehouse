@@ -1,5 +1,21 @@
 # Troubleshooting
 
+재현 가능한 증상, 근본 원인, 해결 방법, 검증 결과를 기록한다. 같은 문제를 다시 만났을 때 임시 우회 대신 안전한 해결책을 선택하는 기준이다.
+
+## Alembic 파일을 수정했는데 migrate가 예전 스키마를 출력함 (2026-09-15)
+
+### 증상
+
+초기 migration의 결제 컬럼을 수정한 뒤 `docker compose run --rm --no-deps migrate alembic upgrade head --sql`을 실행했지만 `charged_amount_krw`, `refunded_amount_krw` 같은 이전 컬럼이 출력됐다.
+
+### 원인
+
+`migrate` 서비스는 로컬 `app/`과 `alembic/`을 bind mount하지 않고 Dockerfile의 `COPY`로 이미지에 포함한다. 따라서 소스만 수정하고 기존 이미지를 실행하면 컨테이너는 변경 전 migration을 사용한다.
+
+### 대응 및 검증
+
+`docker compose build migrate`로 이미지를 다시 빌드한 뒤 같은 오프라인 SQL 생성을 실행했다. 종료 코드 0과 함께 `request_amount_krw`, `paid_amount_krw`, `refund_amount_krw`, 현재 금액·상태 CHECK 제약이 출력되는 것을 확인했다. 이 검증은 SQL 생성만 수행했으며 기존 MySQL 데이터는 변경하지 않았다.
+
 ## Thrift JDBC 접속 시 lakehouse.default SCHEMA_NOT_FOUND
 
 - 검증: 수정 후 동일 JDBC URL로 세션 생성, `SELECT 1`, Bronze/Silver 각각 29건 조회 성공. Beeline 종료 시 `/home/spark/.beeline` 디렉터리 생성 경고는 있었으나 조회와 종료 코드 0에는 영향이 없었다.
@@ -31,8 +47,6 @@
 ## Spark 실행 중 native-hadoop library 경고
 
 `Unable to load native-hadoop library ... using builtin-java classes`는 네이티브 최적화 대신 Java 구현을 쓴다는 경고다. HDFS 서버 연결 실패를 의미하지 않는다. 이 구성은 Iceberg `S3FileIO`로 MinIO에 접근한다.
-
-재현 가능한 증상, 근본 원인, 해결 방법, 검증 결과를 기록한다. 같은 문제를 다시 만났을 때 임시 우회 대신 안전한 해결책을 선택하는 기준이다.
 
 ## 엔터티 PK 변경 후 검증 SQL에서 `Unknown column 'p.payment_id'`
 

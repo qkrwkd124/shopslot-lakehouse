@@ -1,5 +1,26 @@
 # Change log
 
+## 2026-09-16 — 미수와 환불 의도를 분리한 결제 요약 모델
+
+- `payments`를 누적 수납액, 누적 환불액, 순수납액, 실제 미수액과 `needs_repayment`를 가진 거래 원장의 현재 요약으로 변경했다. `payout = paid + refund`와 상태별 미수 규칙을 ORM 및 초기 Alembic revision에 반영했다.
+- 결제 요청을 먼저 만들고 `payment_requested`를 발행한 뒤, 각 수납·환불 거래가 결제 요약 갱신과 거래 이벤트를 같은 트랜잭션에서 기록하도록 generator를 재구성했다. 일반 환불은 미수를 만들지 않고 재수납 필요 환불만 차액을 미수로 유지한다.
+- P0는 결제 7건, 거래 13건, 전체 이벤트 40건이다. 최초 부분수납, 일반 부분·전액 환불, 재수납이 필요한 환불과 완전·부분 재수납을 포함한다.
+- `verify_p0.sh`에서 PK 타입·상태별 고정 결과 등 중복 검사를 제거했다. MySQL 거래 합계와 결제 요약의 일치, Connector 상태, Outbox→Kafka 전달만 확인하는 smoke test로 축소했다.
+- Python/Bash 문법과 diff 형식을 확인했다. 로컬 Python에는 PyMySQL이 없어 generator 함수 import 실행은 생략했고, 기존 볼륨을 지우는 새 계약의 end-to-end 검증은 수행하지 않았다. Silver 결제 parser 동기화가 후속 작업이다.
+
+## 2026-09-16 — 이벤트 스키마 진화 후속 실험 계획
+
+- Schema Registry를 이용한 이벤트 계약 등록과 호환성 정책 검증을 Silver 후속 계획에 추가했다.
+- 생산자보다 `v1`/`v2` 동시 해석 소비자를 먼저 배포하고, 버전별 parser를 하나의 표준 clean 스키마로 정규화하는 전환 순서를 명시했다.
+- 신규 `v1` 발행 중단 뒤에도 Bronze 과거 데이터 재처리를 위해 parser를 유지하며, 미지원 버전 격리와 폐기 기준까지 검증 범위로 남겼다. 아직 구현·검증한 기능은 아니다.
+
+## 2026-09-15 — 결제 거래 Silver clean 추가
+
+- 공통 `events_clean`에서 `payment_completed`와 `payment_refunded`만 선택해 거래별 한 행으로 만드는 `payment_transactions_clean` full-refresh 배치를 추가했다.
+- 결제 ID·거래 ID·금액을 BIGINT로 변환하고 양수 여부를 검사한다. 수납의 `paid`, 부분 환불의 `partially_refunded + partial`, 전액 환불의 `refunded + full` 조합을 계약으로 검증한다.
+- 서로 다른 유효 이벤트가 같은 `payment_transaction_id`를 사용하면 거래 한 행의 기준을 위반하므로 실패하며 기존 테이블을 보존한다. `make silver-payment-transactions` 실행 명령을 추가했다.
+- 검증: events_clean 30건에서 결제 이벤트 9건을 선택해 제외 0건으로 저장했다. 수납 7건, 부분 환불 1건, 전액 환불 1건을 확인했다.
+
 ## 2026-09-15 — bookings_current를 예약 clean 경계에 맞게 정리
 
 - `booking_events_clean`이 예약 lifecycle 이벤트만 보장하므로 current SQL의 이벤트 종류 재필터링을 제거하고, 생성 속성·최신 일정·최신 상태를 결합하는 책임만 남겼다.
