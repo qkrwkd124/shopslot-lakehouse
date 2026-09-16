@@ -105,17 +105,48 @@ class Booking(BaseModel):
 class Payment(BaseModel):
     __tablename__ = "payments"
     __table_args__ = (
+        CheckConstraint("request_amount_krw > 0", name="payments_request_positive"),
+        CheckConstraint("payout_amount_krw >= 0", name="payments_payout_nonnegative"),
         CheckConstraint("paid_amount_krw >= 0", name="payments_paid_nonnegative"),
-        CheckConstraint("refunded_amount_krw >= 0", name="payments_refunded_nonnegative"),
+        CheckConstraint("refund_amount_krw >= 0", name="payments_refund_nonnegative"),
+        CheckConstraint("unpaid_amount_krw >= 0", name="payments_unpaid_nonnegative"),
+        CheckConstraint(
+            "payout_amount_krw = paid_amount_krw + refund_amount_krw",
+            name="payments_net_amount_matches_movements",
+        ),
+        CheckConstraint(
+            "paid_amount_krw <= request_amount_krw",
+            name="payments_paid_not_over_request",
+        ),
+        CheckConstraint(
+            "(payment_status = 'unpaid' AND paid_amount_krw < request_amount_krw "
+            "AND unpaid_amount_krw = request_amount_krw - paid_amount_krw) OR "
+            "(payment_status = 'paid' AND paid_amount_krw = request_amount_krw "
+            "AND unpaid_amount_krw = 0 AND needs_repayment = 0) OR "
+            "(payment_status = 'partially_refunded' AND paid_amount_krw > 0 "
+            "AND paid_amount_krw < request_amount_krw AND refund_amount_krw > 0 "
+            "AND unpaid_amount_krw = 0 AND needs_repayment = 0) OR "
+            "(payment_status = 'refunded' AND paid_amount_krw = 0 "
+            "AND refund_amount_krw > 0 AND unpaid_amount_krw = 0 "
+            "AND needs_repayment = 0)",
+            name="payments_status_matches_amounts",
+        ),
+        CheckConstraint(
+            "needs_repayment = 0 OR payment_status = 'unpaid'",
+            name="payments_repayment_requires_unpaid",
+        ),
         UniqueConstraint("booking_id", name="uq_payments_booking"),
     )
 
     booking_id: Mapped[int] = mapped_column(
         ForeignKey("bookings.id", name="fk_payments_booking")
     )
-    charged_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True))
+    request_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True))
+    payout_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True), server_default=text("0"))
     paid_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True), server_default=text("0"))
-    refunded_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True), server_default=text("0"))
+    refund_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True), server_default=text("0"))
+    unpaid_amount_krw: Mapped[int] = mapped_column(INTEGER(unsigned=True), server_default=text("0"))
+    needs_repayment: Mapped[bool] = mapped_column(Boolean, server_default=text("0"))
     payment_status: Mapped[str] = mapped_column(String(32))
     paid_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=6))
     refunded_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=6))

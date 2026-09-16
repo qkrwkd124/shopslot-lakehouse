@@ -23,10 +23,25 @@ RESCHEDULED_INDEX = 9
 CANCELLED_INDEX = 7
 NO_SHOW_INDEX = 8
 CHECKED_IN_INDICES = (1, 2, 3, 4, 5, 6, 9)
-PAID_INDICES = CHECKED_IN_INDICES
-REFUND_AMOUNTS = {
-    3: 20_000,  # partial refund
-    6: BOOKED_PRICE_KRW,  # full refund
+PAYMENT_INDICES = CHECKED_IN_INDICES
+INITIAL_PAYMENT_AMOUNTS = {
+    1: BOOKED_PRICE_KRW,
+    2: 30_000,  # initial partial payment: unpaid 25,000
+    3: BOOKED_PRICE_KRW,
+    4: BOOKED_PRICE_KRW,
+    5: BOOKED_PRICE_KRW,
+    6: BOOKED_PRICE_KRW,
+    9: BOOKED_PRICE_KRW,
+}
+REFUND_SCENARIOS = {
+    3: (20_000, False),  # accepted partial refund: no receivable
+    4: (20_000, True),  # temporary refund: recollection required
+    5: (BOOKED_PRICE_KRW, False),  # accepted full refund
+    6: (BOOKED_PRICE_KRW, True),  # full refund followed by partial recollection
+}
+REPAYMENT_AMOUNTS = {
+    4: 20_000,  # fully recollected
+    6: 30_000,  # still unpaid 25,000
 }
 
 
@@ -54,16 +69,13 @@ def payment_id_for(index: int) -> int:
     return index
 
 
-def payment_transaction_id_for(index: int) -> int:
-    return index
+def payment_transaction_id_for(index: int, occurrence: int = 1) -> int:
+    return (occurrence - 1) * BOOKING_COUNT + index
 
 
-def refund_transaction_id_for(index: int) -> int:
-    return BOOKING_COUNT + index
-
-
-def event_id_for(event_type: str, index: int) -> str:
-    return deterministic_id(f"p0-{event_type}-event-{index}")
+def event_id_for(event_type: str, index: int, occurrence: int = 1) -> str:
+    suffix = "" if occurrence == 1 else f"-{occurrence}"
+    return deterministic_id(f"p0-{event_type}-event-{index}{suffix}")
 
 
 def created_at_for(base_time: datetime, index: int) -> datetime:
@@ -391,128 +403,308 @@ def apply_booking_lifecycle(
         )
 
 
-def complete_payments(connection: pymysql.connections.Connection, base_time: datetime) -> None:
-    for index in PAID_INDICES:
+def create_payment_requests(
+    connection: pymysql.connections.Connection, base_time: datetime
+) -> None:
+    """Create the payment aggregate before any money movement."""
+    for index in PAYMENT_INDICES:
         booking_id = booking_id_for(index)
         shop_id = shop_id_for(index)
         payment_id = payment_id_for(index)
-        transaction_id = payment_transaction_id_for(index)
         effective_start_at = start_at_for(base_time, index)
         if index == RESCHEDULED_INDEX:
             effective_start_at += timedelta(days=1)
-        event_time = effective_start_at + timedelta(minutes=60)
-        event_id = event_id_for("payment_completed", index)
+        event_time = effective_start_at + timedelta(minutes=45)
+        event_id = event_id_for("payment_requested", index)
         payload = {
             **base_event_payload(
                 event_id=event_id,
-                event_type="payment_completed",
+                event_type="payment_requested",
                 event_time=event_time,
                 booking_id=booking_id,
                 shop_id=shop_id,
             ),
             "payment_id": payment_id,
-            "payment_transaction_id": transaction_id,
-            "amount_krw": BOOKED_PRICE_KRW,
-            "payment_status": "paid",
+            "request_amount_krw": BOOKED_PRICE_KRW,
+            "payout_amount_krw": 0,
+            "refund_amount_krw": 0,
+            "paid_amount_krw": 0,
+            "unpaid_amount_krw": BOOKED_PRICE_KRW,
+            "payment_status": "unpaid",
+            "needs_repayment": False,
         }
 
         with transaction(connection) as cursor:
             cursor.execute(
                 """
                 INSERT INTO payments
-                  (id, booking_id, charged_amount_krw, paid_amount_krw,
-                   refunded_amount_krw, payment_status, paid_at)
-                VALUES (%s, %s, %s, %s, 0, 'paid', %s)
+                  (id, booking_id, request_amount_krw, payout_amount_krw,
+                   refund_amount_krw, paid_amount_krw, unpaid_amount_krw,
+                   needs_repayment, payment_status)
+                VALUES (%s, %s, %s, 0, 0, 0, %s, 0, 'unpaid')
                 """,
                 (
                     payment_id,
                     booking_id,
                     BOOKED_PRICE_KRW,
                     BOOKED_PRICE_KRW,
-                    mysql_datetime(event_time),
                 ),
-            )
-            cursor.execute(
-                """
-                INSERT INTO payment_transactions
-                  (id, payment_id, transaction_type, amount_krw, occurred_at)
-                VALUES (%s, %s, 'payment', %s, %s)
-                """,
-                (transaction_id, payment_id, BOOKED_PRICE_KRW, mysql_datetime(event_time)),
             )
             insert_outbox_event(
                 cursor,
                 event_id=event_id,
-                event_type="payment_completed",
+                event_type="payment_requested",
                 booking_id=booking_id,
                 shop_id=shop_id,
                 payload=payload,
                 event_time=event_time,
             )
-        print(f"committed event_type=payment_completed payment_id={payment_id}")
+        print(f"committed event_type=payment_requested payment_id={payment_id}")
 
 
-def refund_payments(connection: pymysql.connections.Connection, base_time: datetime) -> None:
-    for index, refund_amount in REFUND_AMOUNTS.items():
-        booking_id = booking_id_for(index)
-        shop_id = shop_id_for(index)
-        payment_id = payment_id_for(index)
-        transaction_id = refund_transaction_id_for(index)
-        event_time = start_at_for(base_time, index) + timedelta(days=1, hours=2)
-        payment_status = "refunded" if refund_amount == BOOKED_PRICE_KRW else "partially_refunded"
-        event_id = event_id_for("payment_refunded", index)
+def payment_state_for(
+    *,
+    request_amount: int,
+    paid_amount: int,
+    refund_amount: int,
+    needs_repayment: bool,
+) -> tuple[str, int]:
+    """Return the business status and actual receivable after a movement."""
+    if not 0 <= paid_amount <= request_amount:
+        raise RuntimeError(
+            f"paid amount must be between zero and request amount: "
+            f"paid={paid_amount}, request={request_amount}"
+        )
+
+    if needs_repayment or refund_amount == 0:
+        if paid_amount == request_amount:
+            return "paid", 0
+        return "unpaid", request_amount - paid_amount
+
+    if paid_amount == request_amount:
+        return "paid", 0
+    if paid_amount == 0:
+        return "refunded", 0
+    return "partially_refunded", 0
+
+
+def apply_payment_movement(
+    connection: pymysql.connections.Connection,
+    *,
+    index: int,
+    transaction_type: str,
+    amount_krw: int,
+    occurrence: int,
+    event_time: datetime,
+    needs_repayment: bool = False,
+) -> None:
+    """Append one movement and update the materialized payment summary atomically."""
+    if transaction_type not in {"payment", "refund"}:
+        raise ValueError(f"unsupported transaction_type={transaction_type}")
+    if amount_krw <= 0:
+        raise ValueError("amount_krw must be positive")
+
+    booking_id = booking_id_for(index)
+    shop_id = shop_id_for(index)
+    payment_id = payment_id_for(index)
+    transaction_id = payment_transaction_id_for(index, occurrence)
+    event_type = "payment_completed" if transaction_type == "payment" else "payment_refunded"
+    event_id = event_id_for(event_type, index, occurrence)
+
+    with transaction(connection) as cursor:
+        cursor.execute(
+            """
+            SELECT request_amount_krw, payout_amount_krw, refund_amount_krw,
+                   paid_amount_krw, needs_repayment
+            FROM payments
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (payment_id,),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            raise RuntimeError(f"payment_id={payment_id} does not exist")
+        request_amount, payout_amount, refund_amount, paid_amount = map(int, current[:4])
+        current_needs_repayment = bool(current[4])
+
+        if transaction_type == "payment":
+            new_payout_amount = payout_amount + amount_krw
+            new_refund_amount = refund_amount
+            new_paid_amount = paid_amount + amount_krw
+            if new_paid_amount > request_amount:
+                raise RuntimeError(
+                    f"payment_id={payment_id} cannot collect more than its request: "
+                    f"paid={paid_amount}, amount={amount_krw}, request={request_amount}"
+                )
+            new_needs_repayment = current_needs_repayment and (
+                new_paid_amount < request_amount
+            )
+        else:
+            if amount_krw > paid_amount:
+                raise RuntimeError(
+                    f"payment_id={payment_id} cannot refund more than its current "
+                    f"paid amount: amount={amount_krw}, paid={paid_amount}"
+                )
+            new_payout_amount = payout_amount
+            new_paid_amount = paid_amount - amount_krw
+            new_refund_amount = refund_amount + amount_krw
+            new_needs_repayment = current_needs_repayment or needs_repayment
+
+        payment_status, unpaid_amount = payment_state_for(
+            request_amount=request_amount,
+            paid_amount=new_paid_amount,
+            refund_amount=new_refund_amount,
+            needs_repayment=new_needs_repayment,
+        )
+        if new_payout_amount != new_paid_amount + new_refund_amount:
+            raise RuntimeError("net paid amount does not match payment movements")
+
+        if transaction_type == "payment":
+            cursor.execute(
+                """
+                UPDATE payments
+                SET payout_amount_krw = %s,
+                    refund_amount_krw = %s,
+                    paid_amount_krw = %s,
+                    unpaid_amount_krw = %s,
+                    needs_repayment = %s,
+                    payment_status = %s,
+                    paid_at = %s
+                WHERE id = %s
+                """,
+                (
+                    new_payout_amount,
+                    new_refund_amount,
+                    new_paid_amount,
+                    unpaid_amount,
+                    new_needs_repayment,
+                    payment_status,
+                    mysql_datetime(event_time),
+                    payment_id,
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE payments
+                SET payout_amount_krw = %s,
+                    refund_amount_krw = %s,
+                    paid_amount_krw = %s,
+                    unpaid_amount_krw = %s,
+                    needs_repayment = %s,
+                    payment_status = %s,
+                    refunded_at = %s
+                WHERE id = %s
+                """,
+                (
+                    new_payout_amount,
+                    new_refund_amount,
+                    new_paid_amount,
+                    unpaid_amount,
+                    new_needs_repayment,
+                    payment_status,
+                    mysql_datetime(event_time),
+                    payment_id,
+                ),
+            )
+        require_one_updated(cursor, operation=event_type)
+
+        cursor.execute(
+            """
+            INSERT INTO payment_transactions
+              (id, payment_id, transaction_type, amount_krw, occurred_at)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                transaction_id,
+                payment_id,
+                transaction_type,
+                amount_krw,
+                mysql_datetime(event_time),
+            ),
+        )
+
         payload = {
             **base_event_payload(
                 event_id=event_id,
-                event_type="payment_refunded",
+                event_type=event_type,
                 event_time=event_time,
                 booking_id=booking_id,
                 shop_id=shop_id,
             ),
             "payment_id": payment_id,
             "payment_transaction_id": transaction_id,
-            "amount_krw": refund_amount,
+            "request_amount_krw": request_amount,
+            "amount_krw": amount_krw,
+            "payout_amount_krw": new_payout_amount,
+            "refund_amount_krw": new_refund_amount,
+            "paid_amount_krw": new_paid_amount,
+            "unpaid_amount_krw": unpaid_amount,
             "payment_status": payment_status,
-            "refund_type": "full" if refund_amount == BOOKED_PRICE_KRW else "partial",
+            "needs_repayment": new_needs_repayment,
         }
+        if transaction_type == "refund":
+            payload["refund_type"] = "full" if new_paid_amount == 0 else "partial"
+        insert_outbox_event(
+            cursor,
+            event_id=event_id,
+            event_type=event_type,
+            booking_id=booking_id,
+            shop_id=shop_id,
+            payload=payload,
+            event_time=event_time,
+        )
+    print(
+        f"committed event_type={event_type} payment_id={payment_id} "
+        f"payout={new_payout_amount} refund={new_refund_amount} "
+        f"paid={new_paid_amount} unpaid={unpaid_amount} status={payment_status}"
+    )
 
-        with transaction(connection) as cursor:
-            cursor.execute(
-                """
-                UPDATE payments
-                SET refunded_amount_krw = refunded_amount_krw + %s,
-                    payment_status = %s,
-                    refunded_at = %s
-                WHERE id = %s
-                  AND refunded_amount_krw + %s <= paid_amount_krw
-                """,
-                (
-                    refund_amount,
-                    payment_status,
-                    mysql_datetime(event_time),
-                    payment_id,
-                    refund_amount,
-                ),
-            )
-            require_one_updated(cursor, operation="payment_refunded")
-            cursor.execute(
-                """
-                INSERT INTO payment_transactions
-                  (id, payment_id, transaction_type, amount_krw, occurred_at)
-                VALUES (%s, %s, 'refund', %s, %s)
-                """,
-                (transaction_id, payment_id, refund_amount, mysql_datetime(event_time)),
-            )
-            insert_outbox_event(
-                cursor,
-                event_id=event_id,
-                event_type="payment_refunded",
-                booking_id=booking_id,
-                shop_id=shop_id,
-                payload=payload,
-                event_time=event_time,
-            )
-        print(f"committed event_type=payment_refunded payment_id={payment_id}")
+
+def apply_initial_payments(
+    connection: pymysql.connections.Connection, base_time: datetime
+) -> None:
+    for index, amount_krw in INITIAL_PAYMENT_AMOUNTS.items():
+        effective_start_at = start_at_for(base_time, index)
+        if index == RESCHEDULED_INDEX:
+            effective_start_at += timedelta(days=1)
+        apply_payment_movement(
+            connection,
+            index=index,
+            transaction_type="payment",
+            amount_krw=amount_krw,
+            occurrence=1,
+            event_time=effective_start_at + timedelta(minutes=60),
+        )
+
+
+def refund_payments(connection: pymysql.connections.Connection, base_time: datetime) -> None:
+    for index, (refund_amount, requires_repayment) in REFUND_SCENARIOS.items():
+        apply_payment_movement(
+            connection,
+            index=index,
+            transaction_type="refund",
+            amount_krw=refund_amount,
+            occurrence=2,
+            event_time=start_at_for(base_time, index) + timedelta(days=1, hours=2),
+            needs_repayment=requires_repayment,
+        )
+
+
+def apply_recollection_scenarios(
+    connection: pymysql.connections.Connection, base_time: datetime
+) -> None:
+    for index, amount_krw in REPAYMENT_AMOUNTS.items():
+        first_refund_time = start_at_for(base_time, index) + timedelta(days=1, hours=2)
+        apply_payment_movement(
+            connection,
+            index=index,
+            transaction_type="payment",
+            amount_krw=amount_krw,
+            occurrence=3,
+            event_time=first_refund_time + timedelta(hours=1),
+        )
 
 
 def main() -> None:
@@ -531,14 +723,16 @@ def main() -> None:
         seed_reference_data(connection)
         create_bookings(connection, base_time)
         apply_booking_lifecycle(connection, base_time)
-        complete_payments(connection, base_time)
+        create_payment_requests(connection, base_time)
+        apply_initial_payments(connection, base_time)
         refund_payments(connection, base_time)
+        apply_recollection_scenarios(connection, base_time)
     finally:
         connection.close()
 
     print(
         "P0 dataset generated: "
-        "10 bookings, 7 payments, 9 payment transactions, 29 outbox events"
+        "10 bookings, 7 payments, 13 payment transactions, 40 outbox events"
     )
 
 

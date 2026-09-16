@@ -123,7 +123,13 @@ def upgrade() -> None:
         "payments",
         id_column,
         sa.Column("booking_id", BIGINT, nullable=False),
-        sa.Column("charged_amount_krw", mysql.INTEGER(unsigned=True), nullable=False),
+        sa.Column("request_amount_krw", mysql.INTEGER(unsigned=True), nullable=False),
+        sa.Column(
+            "payout_amount_krw",
+            mysql.INTEGER(unsigned=True),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
         sa.Column(
             "paid_amount_krw",
             mysql.INTEGER(unsigned=True),
@@ -131,8 +137,20 @@ def upgrade() -> None:
             server_default=sa.text("0"),
         ),
         sa.Column(
-            "refunded_amount_krw",
+            "refund_amount_krw",
             mysql.INTEGER(unsigned=True),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
+        sa.Column(
+            "unpaid_amount_krw",
+            mysql.INTEGER(unsigned=True),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
+        sa.Column(
+            "needs_repayment",
+            sa.Boolean(),
             nullable=False,
             server_default=sa.text("0"),
         ),
@@ -141,8 +159,36 @@ def upgrade() -> None:
         sa.Column("refunded_at", TIMESTAMP),
         created_at,
         updated_at,
+        sa.CheckConstraint("request_amount_krw > 0", name="chk_payments_request_positive"),
+        sa.CheckConstraint("payout_amount_krw >= 0", name="chk_payments_payout_nonnegative"),
         sa.CheckConstraint("paid_amount_krw >= 0", name="chk_payments_paid_nonnegative"),
-        sa.CheckConstraint("refunded_amount_krw >= 0", name="chk_payments_refunded_nonnegative"),
+        sa.CheckConstraint("refund_amount_krw >= 0", name="chk_payments_refund_nonnegative"),
+        sa.CheckConstraint("unpaid_amount_krw >= 0", name="chk_payments_unpaid_nonnegative"),
+        sa.CheckConstraint(
+            "payout_amount_krw = paid_amount_krw + refund_amount_krw",
+            name="chk_payments_net_amount_matches_movements",
+        ),
+        sa.CheckConstraint(
+            "paid_amount_krw <= request_amount_krw",
+            name="chk_payments_paid_not_over_request",
+        ),
+        sa.CheckConstraint(
+            "(payment_status = 'unpaid' AND paid_amount_krw < request_amount_krw "
+            "AND unpaid_amount_krw = request_amount_krw - paid_amount_krw) OR "
+            "(payment_status = 'paid' AND paid_amount_krw = request_amount_krw "
+            "AND unpaid_amount_krw = 0 AND needs_repayment = 0) OR "
+            "(payment_status = 'partially_refunded' AND paid_amount_krw > 0 "
+            "AND paid_amount_krw < request_amount_krw AND refund_amount_krw > 0 "
+            "AND unpaid_amount_krw = 0 AND needs_repayment = 0) OR "
+            "(payment_status = 'refunded' AND paid_amount_krw = 0 "
+            "AND refund_amount_krw > 0 AND unpaid_amount_krw = 0 "
+            "AND needs_repayment = 0)",
+            name="chk_payments_status_matches_amounts",
+        ),
+        sa.CheckConstraint(
+            "needs_repayment = 0 OR payment_status = 'unpaid'",
+            name="chk_payments_repayment_requires_unpaid",
+        ),
         sa.ForeignKeyConstraint(["booking_id"], ["bookings.id"], name="fk_payments_booking"),
         sa.UniqueConstraint("booking_id", name="uq_payments_booking"),
         mysql_engine="InnoDB",
