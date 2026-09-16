@@ -3,6 +3,8 @@ from pathlib import Path
 
 from pyspark.sql import SparkSession, functions as F
 
+from event_dq import write_event_dq
+
 SOURCE = "lakehouse.silver.events_clean"
 TARGET = "lakehouse.silver.payment_events_clean"
 SQL_DIR = Path(__file__).resolve().parents[1] / "sql" / "silver"
@@ -91,6 +93,12 @@ def main():
                     TBLPROPERTIES ('format-version'='2', 'write.format.default'='parquet')
                     AS SELECT * FROM silver_payment_events_clean_result
                 """)
+                write_event_dq(
+                    spark,
+                    rejected,
+                    validation_stage="payment_events_clean",
+                    source_snapshot_id=snapshot.snapshot_id,
+                )
 
                 print(
                     f"payment_events_clean written: snapshot={snapshot.snapshot_id}, "
