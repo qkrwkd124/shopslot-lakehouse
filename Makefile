@@ -6,7 +6,7 @@ COMPOSE := docker compose
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
 .PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
-.PHONY: silver-events-clean silver-bookings-events silver-bookings-current silver-payment-events silver-payment-transactions
+.PHONY: silver-events-clean silver-bookings-events silver-bookings-current silver-payment-events silver-payments-current silver-payment-transactions
 
 add-booking:
 	$(COMPOSE) --profile tools run --build --rm generator python add_booking.py
@@ -31,6 +31,9 @@ silver-bookings-events:
 
 silver-payment-events:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_payment_events.py
+
+silver-payments-current:
+	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_payments_current.py
 
 silver-payment-transactions:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_payment_transactions.py

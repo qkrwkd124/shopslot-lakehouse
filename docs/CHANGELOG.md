@@ -1,5 +1,12 @@
 # Change log
 
+## 2026-09-16 — payments_current 상태 재구성 추가
+
+- `payment_events_clean`의 최신 이벤트 사후 요약을 선택해 결제 한 건당 한 행인 `lakehouse.silver.payments_current`를 생성하는 full-refresh 배치를 추가했다.
+- 최초 요청 시각, 최신 거래와 상태의 근거 이벤트를 보존하고 요청 이벤트가 없는 결제는 `is_orphan=true`로 남긴다.
+- 입력 snapshot을 고정하고 payment_id 유일성과 입력 결제의 누락 여부를 저장 전에 검사한다.
+- 검증: 결제 이벤트 20건을 결제 7건으로 재구성했고 orphan 0건, 상태 `paid 3 / partially_refunded 1 / refunded 1 / unpaid 2`를 확인했다.
+
 ## 2026-09-16 — 결제 생명주기 Silver clean 추가
 
 - `payment_requested`, `payment_completed`, `payment_refunded`를 결제별 전체 생명주기로 보존하는 `payment_events_clean` full-refresh 배치를 추가했다.

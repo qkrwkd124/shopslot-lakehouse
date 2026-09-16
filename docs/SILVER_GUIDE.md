@@ -1,6 +1,6 @@
 # Silver 변환 명세
 
-2026-09-16. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 전용 `payment_events_clean`, 예약 상태 `bookings_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. 결제 current, dbt 이관 및 증분 처리는 후속 계획이다.
+2026-09-16. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 전용 `payment_events_clean`, 예약 상태 `bookings_current`, 결제 상태 `payments_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. dbt 이관 및 증분 처리는 후속 계획이다.
 
 ## 실행과 저장
 
@@ -10,6 +10,7 @@ make silver-events-clean   # Bronze 전체 snapshot에서 공통 논리 이벤�
 make silver-bookings-events # events_clean에서 예약 이벤트 clean을 재작성
 make silver-bookings-current # clean 전체 snapshot을 읽어 예약별 현재 상태를 재작성 후 종료
 make silver-payment-events # events_clean에서 결제 이벤트 clean을 재작성
+make silver-payments-current # 결제 이벤트에서 결제별 현재 상태를 재작성 후 종료
 make iceberg-sql
 ```
 
@@ -30,6 +31,8 @@ make iceberg-sql
 9. `spark/sql/silver/parse_payment_events.sql`: 결제 이벤트 3종 필터링, payload 타입화와 결제 요약 계약 검증.
 10. `spark/sql/silver/payment_events_clean.sql`: 유효한 결제 요청·수납·환불 이벤트 컬럼 선택.
 11. `spark/jobs/silver_payment_events.py`: 입력 snapshot, 요청 금액 일관성과 거래 ID 유일성을 검사하고 결제 clean을 저장.
+12. `spark/sql/silver/payments_current.sql`: 결제별 최신 요약과 최초 요청 시각을 한 행으로 재구성.
+13. `spark/jobs/silver_payments_current.py`: 입력 snapshot 고정, 결제 ID 중복·누락 검사와 Iceberg 저장을 담당하는 실행기.
 
 `silver_bronze_input`, `silver_events_input`, `silver_event_candidates`, `silver_booking_event_candidates`, `silver_payment_event_candidates`와 각 `*_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
 
@@ -72,7 +75,15 @@ make iceberg-sql
 
 각 이벤트에는 이벤트 발생 직후의 결제 요약도 함께 기록된다. `payout_amount_krw`와 `refund_amount_krw`는 누적 수납·환불이고 `paid_amount_krw`는 둘의 차이인 순수납액이다. `unpaid_amount_krw`는 실제로 다시 받을 금액이며 일반 환불에서는 0, `needs_repayment=true`인 환불에서는 청구액과 순수납액의 차이다. parser는 이 금액 관계와 상태 조합을 검증하지만 값을 다시 계산해 수정하지 않는다.
 
-거래 통계는 `payment_transaction_id IS NOT NULL` 조건으로 같은 테이블에서 조회할 수 있다. 별도 `payment_transactions_clean` 물리 테이블은 현재 데이터와 검증 로직이 중복되므로 새 흐름에서는 사용하지 않는다. 거래 전용 보존 정책·권한·성능 요구가 생기면 view 또는 별도 모델로 분리한다. Silver `payments_current`는 이벤트 순서와 요약 필드로 결제별 최신 상태를 재구성할 예정이다.
+거래 통계는 `payment_transaction_id IS NOT NULL` 조건으로 같은 테이블에서 조회할 수 있다. 별도 `payment_transactions_clean` 물리 테이블은 현재 데이터와 검증 로직이 중복되므로 새 흐름에서는 사용하지 않는다. 거래 전용 보존 정책·권한·성능 요구가 생기면 view 또는 별도 모델로 분리한다.
+
+## payments_current 재구성
+
+한 행은 결제 한 건(`payment_id`)이다. `payment_events_clean`의 이벤트별 사후 요약 중 가장 최신 행을 선택해 요청액, 누적 수납·환불액, 순수납액, 실제 미수액과 결제 상태를 그대로 가져온다. 이 단계에서 금액을 다시 계산하지 않으며 upstream clean이 검증한 요약을 사용한다.
+
+최초 `payment_requested` 이벤트의 시각을 `requested_event_time`으로 보존한다. 요청 이벤트 없이 수납·환불 이벤트만 존재하는 결제도 버리지 않고 `is_orphan=true`로 남긴다. 최신 거래 ID·종류·금액과 최신 상태를 만든 event ID·종류·시각을 함께 저장해 현재 값의 근거 이벤트를 추적할 수 있다.
+
+실행기는 `payment_events_clean`의 main snapshot을 고정하고, 결과가 payment_id당 한 행인지와 입력의 모든 payment_id가 결과에 포함됐는지를 저장 전에 검사한다. 결과는 `CREATE OR REPLACE TABLE`로 전체 교체하며 MySQL `payments`와 자동 동기화하거나 비교하는 작업은 아직 포함하지 않는다.
 
 ## 핵심 SQL 개념
 
@@ -110,6 +121,10 @@ FROM lakehouse.silver.payment_events_clean
 WHERE payment_transaction_id IS NOT NULL
 ORDER BY payment_id, event_time;
 
+SELECT payment_id, payment_status, paid_amount_krw, unpaid_amount_krw
+FROM lakehouse.silver.payments_current
+ORDER BY payment_id;
+
 SELECT event_type, count(*)
 FROM lakehouse.silver.booking_events_clean GROUP BY event_type;
 
@@ -128,7 +143,7 @@ SELECT file_path, record_count FROM lakehouse.silver.booking_events_clean.files;
 
 현재 `events_clean`은 고정한 Bronze snapshot 전체를, `booking_events_clean`은 고정한 events_clean snapshot 전체를 읽고 각 결과 테이블을 교체한다. snapshot은 직전 배치의 추가분이 아니라 해당 commit 이후 테이블 전체 상태를 나타낸다. 입력이 100건 → 300건 → 500건으로 늘면 매번 전체를 처리한다. 결과를 append하지 않으므로 누적 중복은 없지만 기존 입력을 다시 계산하는 비용은 발생한다.
 
-1. **기준 결과 확보:** `bookings_current`까지 full refresh SQL로 작성한다. 이벤트별 정보와 현재 상태 규칙을 먼저 확정하고 소규모 입력으로 검증한다.
+1. **기준 결과 확보:** `bookings_current`와 `payments_current`까지 full refresh SQL로 작성한다. 이벤트별 정보와 현재 상태 규칙을 먼저 확정하고 소규모 입력으로 검증한다.
 2. **증분 처리 설계:** 마지막 성공 입력 snapshot과 이번 종료 snapshot 사이의 추가 데이터를 읽는 방식을 설계한다. 현재 Bronze append-only 조건에서 출발하며 snapshot 만료·이력 단절 시 처리 정책도 정한다. snapshot ID는 숫자 크기로 순서를 비교하지 않는다.
 3. **모델별 반영:** clean은 기존 `event_id`와 비교해 중복을 막고 동일 ID의 payload 충돌을 다룬다. current는 영향을 받은 `booking_id`의 상태를 재구성하고 `MERGE` 등으로 반영한다. 생성 정보 보존과 늦은 이벤트를 고려해야 하므로 단순 append로 전환하지 않는다.
 4. **재실행 안전성:** 결과 쓰기 성공 뒤 진행 위치를 기록한다. 두 기록은 자동으로 하나의 트랜잭션이 되지 않으므로, 쓰기 성공 후 위치 기록 전에 실패해도 재처리가 중복을 만들지 않도록 설계한다. 실패 주입은 운영 데이터와 분리된 검증 환경에서 수행한다.
