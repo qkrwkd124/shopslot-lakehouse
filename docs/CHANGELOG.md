@@ -1,5 +1,12 @@
 # Change log
 
+## 2026-09-16 — 결제 생명주기 Silver clean 추가
+
+- `payment_requested`, `payment_completed`, `payment_refunded`를 결제별 전체 생명주기로 보존하는 `payment_events_clean` full-refresh 배치를 추가했다.
+- 요청 이벤트에서는 거래 컬럼을 NULL로 두고, 수납·환불 이벤트에는 거래 ID·종류·금액과 이벤트 직후의 누적 수납·환불·순수납·미수 상태를 함께 저장한다.
+- 결제 요약 금액과 상태의 내부 일관성, payment별 요청 금액 일치와 거래 ID 유일성을 검사한다. 거래만 필요하면 `payment_transaction_id IS NOT NULL`로 선택할 수 있어 별도 거래 clean을 새 흐름에서는 사용하지 않는다.
+- Python 문법, Compose 설정, Make 실행 명령과 diff 형식을 확인했다. `events_clean` 40건에서 결제 이벤트 20건을 선택해 제외 0건으로 저장했고, 요청 7건·수납 9건·환불 4건이 새 계약과 일치했다.
+
 ## 2026-09-16 — 미수와 환불 의도를 분리한 결제 요약 모델
 
 - `payments`를 누적 수납액, 누적 환불액, 순수납액, 실제 미수액과 `needs_repayment`를 가진 거래 원장의 현재 요약으로 변경했다. `payout = paid + refund`와 상태별 미수 규칙을 ORM 및 초기 Alembic revision에 반영했다.

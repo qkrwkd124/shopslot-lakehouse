@@ -1,15 +1,15 @@
 # Silver 변환 명세
 
-2026-09-15. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 거래 `payment_transactions_clean`, 예약 상태 `bookings_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. 결제 current, dbt 이관 및 증분 처리는 후속 계획이다.
+2026-09-16. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 전용 `payment_events_clean`, 예약 상태 `bookings_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. 결제 current, dbt 이관 및 증분 처리는 후속 계획이다.
 
 ## 실행과 저장
 
 ```bash
 make iceberg-up            # spark가 실행 중이면 생략 가능
 make silver-events-clean   # Bronze 전체 snapshot에서 공통 논리 이벤트를 재작성
-make silver-events         # events_clean에서 예약 이벤트 clean을 재작성
-make silver-current        # clean 전체 snapshot을 읽어 예약별 현재 상태를 재작성 후 종료
-make silver-payment-transactions # events_clean에서 결제 거래 clean을 재작성
+make silver-bookings-events # events_clean에서 예약 이벤트 clean을 재작성
+make silver-bookings-current # clean 전체 snapshot을 읽어 예약별 현재 상태를 재작성 후 종료
+make silver-payment-events # events_clean에서 결제 이벤트 clean을 재작성
 make iceberg-sql
 ```
 
@@ -24,14 +24,14 @@ make iceberg-sql
 3. `spark/jobs/silver_events_clean.py`: Bronze snapshot을 고정하고 `events_clean`을 Iceberg에 저장.
 4. `spark/sql/silver/parse_booking_events.sql`: 예약 이벤트 5종 필터링, payload 타입화와 도메인 검증.
 5. `spark/sql/silver/booking_events_clean.sql`: 도메인 계약을 통과한 예약 이벤트 컬럼 선택.
-6. `spark/jobs/silver_booking_events.py`: `events_clean` snapshot을 고정하고 예약 clean을 저장.
+6. `spark/jobs/silver_bookings_events.py`: `events_clean` snapshot을 고정하고 예약 clean을 저장.
 7. `spark/sql/silver/bookings_current.sql`: 예약 이벤트에 흩어진 속성과 최신 상태를 예약별 한 행으로 재구성.
 8. `spark/jobs/silver_bookings_current.py`: 입력 snapshot 고정, 중복 검사와 Iceberg 저장을 담당하는 실행기.
-9. `spark/sql/silver/parse_payment_transactions.sql`: 결제 이벤트 2종 필터링, payload 타입화와 거래 계약 검증.
-10. `spark/sql/silver/payment_transactions_clean.sql`: 유효한 수납·환불 거래 컬럼 선택.
-11. `spark/jobs/silver_payment_transactions.py`: 입력 snapshot과 거래 ID grain을 검사하고 결제 거래 clean을 저장.
+9. `spark/sql/silver/parse_payment_events.sql`: 결제 이벤트 3종 필터링, payload 타입화와 결제 요약 계약 검증.
+10. `spark/sql/silver/payment_events_clean.sql`: 유효한 결제 요청·수납·환불 이벤트 컬럼 선택.
+11. `spark/jobs/silver_payment_events.py`: 입력 snapshot, 요청 금액 일관성과 거래 ID 유일성을 검사하고 결제 clean을 저장.
 
-`silver_bronze_input`, `silver_events_input`, `silver_event_candidates`, `silver_booking_event_candidates`, `silver_payment_transaction_candidates`와 각 `*_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
+`silver_bronze_input`, `silver_events_input`, `silver_event_candidates`, `silver_booking_event_candidates`, `silver_payment_event_candidates`와 각 `*_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
 
 ## events_clean 공통 경계
 
@@ -64,15 +64,15 @@ make iceberg-sql
 
 현재 모델은 upstream 예약 clean의 이벤트 종류와 필드 검증을 신뢰하고 같은 검증을 반복하지 않는다. 저장 후 전체 행을 `exceptAll`로 다시 비교하지도 않는다. Iceberg 쓰기 자체의 성공 여부는 Spark 명령의 예외로 판단하고, current 단계에서는 새 grain과 상태 재구성에서 생길 수 있는 누락·join fan-out만 검사한다. orphan은 배치를 실패시키지 않고 `is_orphan=true`와 실행 로그 건수로 남기며, 영구 이력과 알림은 후속 `event_dq`에서 담당한다.
 
-## payment_transactions_clean 한 행의 의미와 컬럼
+## payment_events_clean 한 행의 의미와 컬럼
 
-한 행은 실제 수납 또는 환불 거래 하나(`payment_transaction_id`)다. `payment_completed`는 `transaction_type=payment`, `payment_refunded`는 `transaction_type=refund`로 정규화한다. `payment_id`는 여러 거래를 하나의 결제 상태로 묶는 키이고, `booking_id`는 예약과 연결하는 키다. `request_amount_krw`는 결제의 고정 요청 금액이며 `amount_krw`는 이번 거래에서 움직인 금액이다.
+한 행은 결제 도메인 이벤트 하나(`event_id`)다. 결제 요청 `payment_requested`부터 수납 `payment_completed`, 환불 `payment_refunded`까지 같은 생명주기를 보존한다. 거래가 없는 요청 이벤트는 `payment_transaction_id`, `transaction_type`, `amount_krw`, `refund_type`이 NULL이다. 수납과 환불은 각각 `transaction_type=payment`, `transaction_type=refund`로 정규화한다.
 
-양수 payment/payment_transaction ID, 요청 금액과 거래 금액을 요구하며 한 번의 거래 금액은 요청 금액을 넘을 수 없다. 같은 payment_id의 요청 금액이 이벤트마다 다르거나 서로 다른 event_id가 같은 거래 ID를 사용하면 기존 테이블을 교체하지 않고 실패한다. 제외 행의 영구 격리는 후속 `event_quarantine`에서 담당한다.
+모든 이벤트는 양수 payment ID와 요청 금액을 요구한다. 거래 이벤트는 추가로 양수 transaction ID와 거래 금액을 요구하며, 서로 다른 event_id가 같은 거래 ID를 사용하면 기존 테이블을 교체하지 않고 실패한다. 같은 payment_id의 요청 금액도 이벤트 사이에서 달라질 수 없다.
 
-MySQL `payments`는 append-only 거래의 현재 요약이다. `payout_amount_krw`와 `refund_amount_krw`는 누적 수납·환불이고 `paid_amount_krw`는 둘의 차이인 순수납액이다. `unpaid_amount_krw`는 실제로 다시 받을 금액이며 일반 환불에서는 0, `needs_repayment=true`인 환불에서는 청구액과 순수납액의 차이다. `payment_transactions`가 거래 원장이고 Silver `payments_current`는 이벤트 순서와 이 요약 필드로 현재 상태를 재구성할 예정이다.
+각 이벤트에는 이벤트 발생 직후의 결제 요약도 함께 기록된다. `payout_amount_krw`와 `refund_amount_krw`는 누적 수납·환불이고 `paid_amount_krw`는 둘의 차이인 순수납액이다. `unpaid_amount_krw`는 실제로 다시 받을 금액이며 일반 환불에서는 0, `needs_repayment=true`인 환불에서는 청구액과 순수납액의 차이다. parser는 이 금액 관계와 상태 조합을 검증하지만 값을 다시 계산해 수정하지 않는다.
 
-현재 `payment_transactions_clean` parser는 이전 결제 상태 조합을 기준으로 작성돼 있다. 새 payload의 누적 금액·미수·재수납 필드와 `payment_requested`를 반영하는 작업 및 새 40건 계약의 end-to-end 검증은 다음 단계다.
+거래 통계는 `payment_transaction_id IS NOT NULL` 조건으로 같은 테이블에서 조회할 수 있다. 별도 `payment_transactions_clean` 물리 테이블은 현재 데이터와 검증 로직이 중복되므로 새 흐름에서는 사용하지 않는다. 거래 전용 보존 정책·권한·성능 요구가 생기면 view 또는 별도 모델로 분리한다. Silver `payments_current`는 이벤트 순서와 요약 필드로 결제별 최신 상태를 재구성할 예정이다.
 
 ## 핵심 SQL 개념
 
@@ -106,8 +106,9 @@ FROM lakehouse.silver.booking_events_clean
 ORDER BY booking_id, event_time;
 
 SELECT payment_transaction_id, payment_id, transaction_type, amount_krw
-FROM lakehouse.silver.payment_transactions_clean
-ORDER BY payment_id, occurred_at;
+FROM lakehouse.silver.payment_events_clean
+WHERE payment_transaction_id IS NOT NULL
+ORDER BY payment_id, event_time;
 
 SELECT event_type, count(*)
 FROM lakehouse.silver.booking_events_clean GROUP BY event_type;
