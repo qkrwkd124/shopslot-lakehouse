@@ -63,7 +63,7 @@ down:
 	$(COMPOSE) down --remove-orphans
 
 reset:
-	$(COMPOSE) down -v --remove-orphans
+	$(COMPOSE) --profile streaming --profile tools --profile api down -v --remove-orphans
 
 migrate:
 	$(COMPOSE) run --build --rm migrate
