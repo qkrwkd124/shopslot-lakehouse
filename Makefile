@@ -1,7 +1,7 @@
 COMPOSE := docker compose
 .DEFAULT_GOAL := up
 
-.PHONY: add-booking
+.PHONY: add-booking add-dq-fixture
 .PHONY: up down reset migrate connector generate-p0 verify-p0 smoke logs ps api
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
@@ -10,6 +10,9 @@ COMPOSE := docker compose
 
 add-booking:
 	$(COMPOSE) --profile tools run --build --rm generator python add_booking.py
+
+add-dq-fixture:
+	$(COMPOSE) --profile tools run --build --rm generator python add_dq_fixture.py
 
 thrift-up:
 	$(COMPOSE) up -d --build spark-thrift

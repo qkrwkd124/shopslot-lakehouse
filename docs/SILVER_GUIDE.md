@@ -33,6 +33,8 @@ make iceberg-sql
 11. `spark/jobs/silver_payment_events.py`: 입력 snapshot, 요청 금액 일관성과 거래 ID 유일성을 검사하고 결제 clean을 저장.
 12. `spark/sql/silver/payments_current.sql`: 결제별 최신 요약과 최초 요청 시각을 한 행으로 재구성.
 13. `spark/jobs/silver_payments_current.py`: 입력 snapshot 고정, 결제 ID 중복·누락 검사와 Iceberg 저장을 담당하는 실행기.
+14. `spark/jobs/event_dq.py`: 각 clean 단계의 제외 이벤트를 공통 `event_dq` 테이블에 멱등하게 MERGE.
+15. `spark/sql/silver/merge_event_dq.sql`: dq_key 일치 여부에 따른 DQ 갱신·신규 저장 규칙.
 
 `silver_bronze_input`, `silver_events_input`, `silver_event_candidates`, `silver_booking_event_candidates`, `silver_payment_event_candidates`와 각 `*_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
 
@@ -40,7 +42,7 @@ make iceberg-sql
 
 한 행은 중복 제거된 유효한 논리 이벤트 하나(`event_id`)다. Bronze의 물리 Kafka 레코드와 도메인별 타입 모델 사이에서 공통 계약만 책임진다. `event_id`, `event_type`, `schema_version`, 공통 시각과 ID를 타입화하고 payload 및 Kafka key/topic/partition/offset/timestamp/headers, Bronze 적재 시각을 보존한다.
 
-예약의 customer/service/staff/status와 결제의 payment/transaction/amount/refund 필드는 펼치지 않는다. 따라서 향후 `refund_type` 같은 결제 필드가 바뀌어도 `events_clean` 스키마와 예약 모델은 영향을 받지 않는다. 공통 계약을 통과하지 못한 원문은 Bronze에 남으며, 영구 격리는 후속 `event_dq`의 책임이다.
+예약의 customer/service/staff/status와 결제의 payment/transaction/amount/refund 필드는 펼치지 않는다. 따라서 향후 `refund_type` 같은 결제 필드가 바뀌어도 `events_clean` 스키마와 예약 모델은 영향을 받지 않는다. 공통 계약을 통과하지 못한 원문은 Bronze에 남고 오류 상세는 `event_dq`에 기록한다.
 
 현재 이벤트 계약은 단일 `booking.events.v1` 토픽을 전제로 `booking_id`와 `shop_id`를 공통 필수 ID로 사용한다. 향후 예약·결제 토픽을 나누면 토픽별 staging 경계와 generic aggregate 식별자를 다시 설계한다.
 
@@ -65,7 +67,7 @@ make iceberg-sql
 
 `event_time` 동률에서는 `bronze_ingested_at`, Kafka topic/partition/offset을 결정론적 tie-breaker로 사용한다. 서로 다른 Kafka partition의 offset을 업무 전역 순서로 해석하지 않는다. 실행기는 `booking_events_clean`의 main snapshot을 고정해 동시 교체가 실행 중 입력을 바꾸지 않게 한다. 저장 전 빈 결과, `booking_id` 유일성, 입력의 고유 booking_id가 결과에 모두 포함됐는지를 검사한 뒤 `CREATE OR REPLACE TABLE`로 결과를 저장한다.
 
-현재 모델은 upstream 예약 clean의 이벤트 종류와 필드 검증을 신뢰하고 같은 검증을 반복하지 않는다. 저장 후 전체 행을 `exceptAll`로 다시 비교하지도 않는다. Iceberg 쓰기 자체의 성공 여부는 Spark 명령의 예외로 판단하고, current 단계에서는 새 grain과 상태 재구성에서 생길 수 있는 누락·join fan-out만 검사한다. orphan은 배치를 실패시키지 않고 `is_orphan=true`와 실행 로그 건수로 남기며, 영구 이력과 알림은 후속 `event_dq`에서 담당한다.
+현재 모델은 upstream 예약 clean의 이벤트 종류와 필드 검증을 신뢰하고 같은 검증을 반복하지 않는다. 저장 후 전체 행을 `exceptAll`로 다시 비교하지도 않는다. Iceberg 쓰기 자체의 성공 여부는 Spark 명령의 예외로 판단하고, current 단계에서는 새 grain과 상태 재구성에서 생길 수 있는 누락·join fan-out만 검사한다. orphan은 배치를 실패시키지 않고 `is_orphan=true`와 실행 로그 건수로 남긴다. current orphan의 DQ 통합과 알림은 후속 범위다.
 
 ## payment_events_clean 한 행의 의미와 컬럼
 
@@ -101,7 +103,11 @@ make iceberg-sql
 
 공통 경계에서 같은 event_id는 가장 이른 bronze_ingested_at을 우선하고, 동률이면 Kafka topic/partition/offset으로 대표 행을 결정한다. partition 사이 offset을 업무 전역 순서로 해석하지 않는다. 같은 event_id의 유효한 원문 문자열이 다르면 임의 선택 대신 쓰기 전에 실패시킨다. 예약 clean은 이 결과를 신뢰하므로 중복 제거를 반복하지 않는다.
 
-제외 건수와 사유는 로그에 출력하고 원문은 upstream `events_clean`과 Bronze에 보존한다. `event_dq` 영구 테이블은 아직 만들지 않았다. UUID 형식, FK 존재, 이전 상태를 고려한 상태 전이, 일정 변경 전후 시각 차이 등 모든 업무 계약을 검증한 것은 아니다. 알 수 없는 추가 필드는 컬럼으로 펼치지 않고 payload에 남는다. v2 지원·JSON 의미 기반 충돌 판단·격리 테이블은 후속 과제다.
+제외 건수와 사유는 로그에 출력하고 제외 이벤트 상세는 `lakehouse.silver.event_dq`에 저장한다. 한 행은 `dq_key` 하나이며 정상적으로 파싱된 이벤트는 `event_id`, event_id가 없거나 비어 있으면 Kafka topic/partition/offset을 키로 사용한다. 같은 오류를 재처리하면 Iceberg `MERGE`가 기존 행의 마지막 발견 시각과 입력 snapshot을 갱신하므로 행이 중복되지 않는다. 최초 발견 시각은 유지한다.
+
+`event_dq`는 `events_clean`, `booking_events_clean`, `payment_events_clean`의 `validation_error`만 수집한다. current의 orphan과 집계형 품질 지표는 실행 로그에 남으며 아직 DQ 테이블로 통합하지 않았다. UUID 형식, FK 존재, 이전 상태를 고려한 상태 전이, 일정 변경 전후 시각 차이 등 모든 업무 계약을 검증한 것은 아니다. 알 수 없는 추가 필드는 컬럼으로 펼치지 않고 payload에 남는다. v2 지원·JSON 의미 기반 충돌 판단·격리 테이블은 후속 과제다.
+
+세 clean 테이블과 `event_dq`는 서로 다른 Iceberg commit이다. clean 저장 뒤 DQ MERGE가 실패하면 clean만 갱신될 수 있으므로 운영 확장 시 재시도와 배치 실행 상태 관리가 필요하다. 현재 Job은 동시에 실행하지 않고 순차 실행한다.
 
 ## 재실행 방식
 
@@ -125,6 +131,10 @@ SELECT payment_id, payment_status, paid_amount_krw, unpaid_amount_krw
 FROM lakehouse.silver.payments_current
 ORDER BY payment_id;
 
+SELECT validation_stage, validation_error, count(*)
+FROM lakehouse.silver.event_dq
+GROUP BY validation_stage, validation_error;
+
 SELECT event_type, count(*)
 FROM lakehouse.silver.booking_events_clean GROUP BY event_type;
 
@@ -134,6 +144,21 @@ FROM lakehouse.silver.booking_events_clean GROUP BY event_id HAVING count(*) > 1
 
 SELECT file_path, record_count FROM lakehouse.silver.booking_events_clean.files;
 ```
+
+## event_dq 검증 fixture
+
+정상 P0 결과에는 `validation_error`가 없으므로 선택형 fixture로 예약·결제 오류 이벤트를 각각 한 건 추가할 수 있다. 예약 fixture는 공통 envelope과 나머지 생성 필드는 유효하지만 `booked_price_krw=-1`이고, 결제 fixture는 공통 envelope과 결제 요약은 유효하지만 `amount_krw > request_amount_krw`다. 각각 결정적 event_id를 사용하므로 같은 환경에서 다시 실행해도 이미 존재하는 fixture는 추가하지 않는다.
+
+```bash
+make add-dq-fixture
+# Bronze streaming이 실행 중이면 다음 micro-batch를 기다린다.
+# 단발 수집 환경이면 make bronze-once를 실행한다.
+make silver-events-clean
+make silver-bookings-events
+make silver-payment-events
+```
+
+이후 `event_dq`에서 `booking_events_clean / invalid_booking_created_fields`와 `payment_events_clean / invalid_payment_transaction_fields`를 각각 한 행 확인한다. 같은 clean Job을 다시 실행해도 같은 dq_key가 MERGE되므로 행 수는 증가하지 않고 `last_detected_at`만 갱신된다. fixture 실행 뒤에는 고정 P0 outbox/Kafka 건수 검증이 더 이상 적용되지 않으며 `make reset` 후 P0를 다시 구성하면 기준 상태로 돌아간다.
 
 ## 확장 계획
 

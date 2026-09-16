@@ -1,5 +1,14 @@
 # Change log
 
+## 2026-09-16 — 공통 event_dq 저장 추가
+
+- 세 clean Job의 `validation_error` 행을 하나의 `lakehouse.silver.event_dq`에 저장하는 공통 writer를 추가했다.
+- 정상 이벤트는 event_id, event_id가 없는 잘못된 envelope는 Kafka topic/partition/offset으로 `dq_key`를 만들고, Iceberg `MERGE`로 재실행 중복을 방지한다.
+- 최초·마지막 발견 시각, 검증 단계·사유, 원문과 Kafka 위치, 입력 snapshot을 보존한다. current orphan과 집계형 품질 지표는 아직 포함하지 않는다.
+- DQ 입력 준비와 테이블 초기 생성은 공통 Python writer에 두고, upsert 규칙은 `merge_event_dq.sql`로 분리했다.
+- 정상 P0와 분리해 `make add-dq-fixture`로 음수 가격 예약과 요청액보다 큰 결제 거래 이벤트를 각각 한 건 추가하는 재현 시나리오를 제공한다.
+- 검증: 오류가 없는 P0 입력에서 `event_dq` 0건을 확인한 뒤 fixture를 Outbox→Kafka→Bronze로 전달했다. 결제 후보 21건 중 1건이 `invalid_payment_transaction_fields`로 제외되고 정상 20건이 유지됐다. 결제 clean을 재실행해 DQ 행은 1건으로 유지되고 `first_detected_at`은 보존되며 `last_detected_at`만 갱신되는 것도 확인했다.
+
 ## 2026-09-16 — payments_current 상태 재구성 추가
 
 - `payment_events_clean`의 최신 이벤트 사후 요약을 선택해 결제 한 건당 한 행인 `lakehouse.silver.payments_current`를 생성하는 full-refresh 배치를 추가했다.
