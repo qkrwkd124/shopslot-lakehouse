@@ -1,0 +1,15 @@
+name: shopslot_lakehouse
+version: "1.0.0"
+config-version: 2
+
+profile: shopslot_lakehouse
+
+model-paths: ["models"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages", "logs"]
+
+# dbt가 만들 모델은 기존 lakehouse.silver와 분리된 silver_dbt namespace에서
+# 먼저 검증한다. 실제 모델과 materialization 설정은 다음 단계에서 추가한다.
+models:
+  shopslot_lakehouse:
+    +file_format: iceberg

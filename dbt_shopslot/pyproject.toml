@@ -1,0 +1,8 @@
+[project]
+name = "shopslot-dbt"
+version = "0.1.0"
+description = "dbt transformations for the ShopSlot Spark and Iceberg lakehouse"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "dbt-spark[PyHive]==1.11.0",
+]

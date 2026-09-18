@@ -32,10 +32,6 @@ def main():
             *arguments, "spark-internal",
         ]
     config = Path(__file__).with_name("conf").joinpath("spark-defaults.conf").read_text()
-    if mode == "thrift":
-        # Hive JDBC opens the default namespace before executing user SQL.
-        # Keep it in the session catalog; Iceberg uses explicit lakehouse names.
-        config += "\nspark.sql.defaultCatalog=spark_catalog\n"
     for suffix, variable in (("user", "ICEBERG_JDBC_USER"), ("password", "ICEBERG_JDBC_PASSWORD")):
         config += f"\nspark.sql.catalog.lakehouse.jdbc.{suffix}={property_value(os.environ[variable])}\n"
     # Credentials only exist in a private temporary file for this process.

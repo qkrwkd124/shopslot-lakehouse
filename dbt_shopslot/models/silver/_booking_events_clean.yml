@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: booking_events_clean
+    description: 공통 events_clean에서 예약 lifecycle 5종을 타입화하고 도메인 계약을 통과한 이벤트만 보존한다.
+    config:
+      contract:
+        enforced: false
+    columns:
+      - name: event_id
+        description: 논리 이벤트의 전역 식별자.
+        data_tests:
+          - not_null
+          - unique
+      - name: event_type
+        description: 예약 lifecycle 이벤트 종류.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - booking_created
+                  - booking_rescheduled
+                  - booking_cancelled
+                  - checked_in
+                  - no_show_marked
+      - name: booking_id
+        description: 예약 식별자.
+        data_tests:
+          - not_null
+      - name: shop_id
+        description: 예약이 속한 매장 식별자.
+        data_tests:
+          - not_null

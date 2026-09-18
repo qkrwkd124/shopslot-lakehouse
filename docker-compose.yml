@@ -178,8 +178,19 @@ services:
       - spark-checkpoints:/opt/spark/checkpoints
     command: ["/bin/bash", "-lc", "tail -f /dev/null"]
 
+  iceberg-init:
+    <<: *spark-runtime
+    ports: []
+    volumes:
+      - ./spark:/opt/spark/work-dir/spark:ro
+    restart: "no"
+    command: ["python3", "/opt/spark/work-dir/spark/run.py", "submit", "/opt/spark/work-dir/spark/jobs/init_iceberg_catalog.py"]
+
   spark-thrift:
     <<: *spark-runtime
+    depends_on:
+      iceberg-init:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:10000:10000"
       - "127.0.0.1:4042:4040"
@@ -195,6 +206,16 @@ services:
       timeout: 3s
       start_period: 40s
       retries: 6
+
+  dbt:
+    build:
+      context: ./dbt_shopslot
+    depends_on:
+      spark-thrift:
+        condition: service_healthy
+    environment:
+      DBT_SPARK_HOST: spark-thrift
+    profiles: ["tools"]
 
   bronze:
     <<: *spark-runtime

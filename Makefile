@@ -5,6 +5,7 @@ COMPOSE := docker compose
 .PHONY: up down reset migrate connector generate-p0 verify-p0 smoke logs ps api
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
+.PHONY: dbt-build dbt-version dbt-debug dbt-booking-events
 .PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
 .PHONY: silver-events-clean silver-bookings-events silver-bookings-current silver-payment-events silver-payments-current silver-payment-transactions
 
@@ -22,6 +23,18 @@ thrift-stop:
 
 thrift-logs:
 	$(COMPOSE) logs --follow --tail=80 spark-thrift
+
+dbt-build:
+	$(COMPOSE) --profile tools build dbt
+
+dbt-version:
+	$(COMPOSE) --profile tools run --rm dbt --version
+
+dbt-debug:
+	$(COMPOSE) --profile tools run --rm dbt debug
+
+dbt-booking-events: dbt-build
+	$(COMPOSE) --profile tools run --rm dbt build --select booking_events_clean
 
 silver-events-clean:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_events_clean.py

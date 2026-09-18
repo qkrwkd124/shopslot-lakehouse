@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: int_booking_events_validated
+    description: 예약 이벤트를 타입화하고 정상·오류 분기에 공통으로 사용할 validation_error를 계산하는 ephemeral 중간 모델.
+    columns:
+      - name: event_id
+        description: 논리 이벤트의 전역 식별자.
+      - name: validation_error
+        description: 정상 행은 NULL, 예약 도메인 계약을 위반한 행은 오류 코드.

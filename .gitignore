@@ -6,6 +6,9 @@ warehouse/
 checkpoints/
 __pycache__/
 *.py[cod]
+dbt_shopslot/target/
+dbt_shopslot/logs/
+dbt_shopslot/dbt_packages/
 
 # Local-only notes and backups
 .private-docs/
