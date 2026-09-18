@@ -1,5 +1,20 @@
 # Change log
 
+## 2026-09-18 — 첫 dbt Silver 비교 모델
+
+- 기존 `lakehouse.silver.events_clean`과 PySpark `booking_events_clean`을 dbt source로 등록하고, 예약 lifecycle 5종을 타입화·검증하는 `lakehouse.silver_dbt.booking_events_clean` full-refresh 모델을 추가했다.
+- 예약 이벤트의 선택·payload 파싱·타입 변환·`validation_error` 계산을 `int_booking_events_validated` ephemeral 중간 모델로 분리했다. 물리 테이블은 만들지 않고 최종 clean SQL의 `__dbt__cte__int_booking_events_validated` CTE로 컴파일되며, clean은 정상 행 선택과 저장만 담당한다.
+- event_id not-null/unique, event_type 허용값, booking_id/shop_id not-null, 이벤트별 업무 계약과 기존 PySpark 결과의 양방향 `EXCEPT ALL` 비교를 포함한 8개 테스트를 추가했다.
+- dbt-spark가 별도 database/catalog 모델 설정을 허용하지 않는 제약에 맞춰 Thrift의 기본 catalog를 `lakehouse`로 변경했다. 단발 `iceberg-init`이 `lakehouse.default` namespace를 먼저 보장하므로 초기 JDBC 연결과 dbt의 2-part relation을 함께 지원한다.
+- 검증: 중간 모델 분리 후 dbt가 모델 2개(ephemeral 1개, table 1개)를 인식했고, 실제 table 모델 1개와 테스트 8개가 모두 통과했다. 기존 PySpark와 dbt 결과는 각각 20행이며 컴파일 SQL에서 ephemeral CTE 삽입을 확인했다. `silver_dbt`의 물리 테이블은 `booking_events_clean` 하나뿐이다. dbt 테이블의 commit은 Iceberg overwrite snapshot이다. 기존 `lakehouse.silver`는 수정하지 않았으며 dbt 증분 materialization과 DQ 쓰기는 아직 적용하지 않았다.
+
+## 2026-09-17 — dbt-spark 실행 환경과 Thrift 연결 구성
+
+- FastAPI 의존성과 분리된 `dbt_shopslot` 프로젝트를 만들고 `dbt-spark[PyHive] 1.11.0`과 전이 의존성을 `uv.lock`으로 고정했다.
+- dbt를 단발 Compose 도구로 추가해 기존 Spark Thrift Server로 SQL을 전달하도록 구성했다. 기존 `lakehouse.silver`와 비교할 수 있도록 개발 target은 `lakehouse.silver_dbt`를 사용한다.
+- 빌드, 버전 확인, 연결 진단 명령을 Make target으로 제공했다. 아직 source·SQL 모델·테스트는 추가하지 않았고 Iceberg 테이블도 생성하지 않았다.
+- 검증: Compose 설정과 잠금 파일을 확인하고 dbt 이미지를 빌드했다. dbt Core 1.12.5, spark adapter 1.11.0을 확인했으며 `dbt debug`의 설정·필수 의존성·`spark-thrift:10000` 연결 검사가 모두 통과했다.
+
 ## 2026-09-16 — 공통 event_dq 저장 추가
 
 - 세 clean Job의 `validation_error` 행을 하나의 `lakehouse.silver.event_dq`에 저장하는 공통 writer를 추가했다.

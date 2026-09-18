@@ -3,6 +3,7 @@
 
 - [Spark Bronze 가이드](SPARK_GUIDE.md): Kafka 수집, trigger, checkpoint, Iceberg commit과 저장 구조
 - [Silver 변환 명세](SILVER_GUIDE.md): 이벤트 계약 검증, 중복 제거, full refresh와 증분 전환 계획
+- [dbt 실행 환경](DBT_GUIDE.md): 단발 컨테이너, Spark Thrift 연결, 파일 역할과 실행 순서
 - [변경 기록](CHANGELOG.md): 기능·계약·운영 변경과 검증 결과
 - [트러블슈팅](TROUBLESHOOTING.md): 증상, 원인, 대응 및 검증
 - [실행 및 접속 안내](../README.md): 환경 구성, 샘플 생성, SQL 조회

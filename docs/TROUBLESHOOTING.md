@@ -2,6 +2,37 @@
 
 재현 가능한 증상, 근본 원인, 해결 방법, 검증 결과를 기록한다. 같은 문제를 다시 만났을 때 임시 우회 대신 안전한 해결책을 선택하는 기준이다.
 
+## dbt-spark에서 별도 Iceberg catalog 지정 실패 (2026-09-18)
+
+### 증상
+
+- `dbt_project.yml`에 `+database: lakehouse`를 두면 parse 단계에서 `Cannot set database in spark!`로 실패했다.
+- `database`를 제거하고 profile의 `server_side_parameters`로 `spark.sql.defaultCatalog=lakehouse`를 전달해도 모델은 `spark_catalog.silver.events_clean`을 찾아 `TABLE_OR_VIEW_NOT_FOUND`로 실패했다.
+
+### 원인
+
+Python 기반 dbt-spark adapter는 Spark의 database와 schema를 같은 계층으로 취급해 relation에 별도 database/catalog를 설정하지 못한다. Thrift 연결의 session parameter도 relation 해석 전에 서버의 초기 catalog를 바꾸지 못했다. 따라서 dbt가 생성한 2-part 이름 `silver.events_clean`이 기존 Thrift 기본값인 `spark_catalog`에서 해석됐다.
+
+### 대응 및 검증
+
+모델과 source에서 `database`를 제거하고 Spark Thrift의 기본 catalog를 `lakehouse`로 변경했다. Hive JDBC가 초기 `default` namespace를 열 수 있도록 단발 `iceberg-init` 서비스가 `lakehouse.default`를 멱등하게 생성한 뒤 Thrift가 시작되도록 의존성을 구성했다. `make dbt-booking-events`를 다시 실행해 `lakehouse.silver_dbt.booking_events_clean` 생성과 8개 테스트, 기존 PySpark 결과의 양방향 비교가 모두 통과했다.
+
+## dbt 옵션 위치 오류와 slim 이미지의 Git 누락 (2026-09-17)
+
+### 증상
+
+- `ENTRYPOINT ["dbt", "--project-dir", ...]`로 만든 이미지에서 `dbt --version`이 `No such option: --project-dir`로 종료됐다.
+- 옵션 위치를 고친 뒤 `dbt debug`의 Spark 연결은 성공했지만 필수 의존성 검사에서 `git`을 찾지 못했다.
+
+### 원인
+
+- 현재 dbt CLI는 해당 프로젝트 옵션을 모든 하위 명령 앞에 두는 entrypoint 형태로 해석하지 않았다.
+- `python:3.12-slim`에는 dbt가 프로젝트 의존성 작업에 요구하는 Git 실행 파일이 기본 설치되지 않는다.
+
+### 대응 및 검증
+
+작업 디렉터리를 `/opt/dbt`로 고정하고 `DBT_PROFILES_DIR=/opt/dbt`, `ENTRYPOINT ["dbt"]`를 사용했다. 이미지에 Git을 최소 패키지로 설치한 뒤 다시 빌드했다. `dbt --version`에서 Core 1.12.5와 spark adapter 1.11.0을 확인했고, `dbt debug`의 프로젝트·프로필·Git·Thrift 연결 검사가 모두 통과했다.
+
 ## Alembic 파일을 수정했는데 migrate가 예전 스키마를 출력함 (2026-09-15)
 
 ### 증상

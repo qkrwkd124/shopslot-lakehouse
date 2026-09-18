@@ -165,16 +165,19 @@ checkpoint는 `spark-checkpoints` 볼륨의 `/opt/spark/checkpoints/booking-even
 
 ```bash
 make silver-events-clean   # Bronze에서 공통 events_clean 전체 재계산·교체 후 종료
-make silver-events         # events_clean에서 예약 전용 booking_events_clean 재계산·교체
-make silver-current        # booking_events_clean에서 bookings_current 재계산·교체 후 종료
-make silver-payment-transactions # events_clean에서 결제 거래 clean 재계산·교체
+make silver-bookings-events # events_clean에서 예약 전용 booking_events_clean 재계산·교체
+make silver-bookings-current # booking_events_clean에서 bookings_current 재계산·교체 후 종료
+make silver-payment-events # events_clean에서 결제 전용 payment_events_clean 재계산·교체
+make silver-payments-current # payment_events_clean에서 payments_current 재계산·교체
 ```
 
-`lakehouse.silver.events_clean`은 Bronze의 고정 snapshot에서 공통 envelope를 타입화하고 `event_id` 중복을 제거한 논리 이벤트 경계다. 예약·결제 전용 필드는 펼치지 않고 payload에 보존한다. `booking_events_clean`은 예약 lifecycle 5종을, `payment_transactions_clean`은 수납·환불 거래를 각각 타입화하고 도메인 계약을 검증한다. `bookings_current`는 정제된 예약 이벤트를 예약별 현재 상태로 재구성하며 결제 current는 후속 작업이다. 새 컨테이너나 streaming checkpoint는 추가하지 않으며 현재 실행 엔진은 Spark이고 dbt는 아직 도입하지 않았다. 상세 규칙·한계·조회 SQL은 [Silver 변환 명세](docs/SILVER_GUIDE.md)를 참고한다.
+`lakehouse.silver.events_clean`은 Bronze의 고정 snapshot에서 공통 envelope를 타입화하고 `event_id` 중복을 제거한 논리 이벤트 경계다. 예약·결제 전용 필드는 펼치지 않고 payload에 보존한다. `booking_events_clean`과 `payment_events_clean`은 각 도메인의 lifecycle을 타입화하고 검증하며, `bookings_current`와 `payments_current`는 도메인 ID별 현재 상태를 재구성한다. 현재 Silver 모델은 PySpark full refresh로 동작한다.
+
+dbt는 별도 단발 컨테이너에서 기존 Spark Thrift에 연결한다. 첫 full-refresh 모델 `lakehouse.silver_dbt.booking_events_clean`을 만들고 기본·업무 계약 테스트와 기존 PySpark 결과의 양방향 비교를 통과했다. 기존 `lakehouse.silver`는 기준 결과로 읽기만 하며 증분 materialization은 아직 적용하지 않았다. `make dbt-booking-events`로 모델과 8개 테스트를 함께 실행한다. 상세 Silver 규칙은 [Silver 변환 명세](docs/SILVER_GUIDE.md), dbt 파일과 실행 순서는 [dbt 실행 환경](docs/DBT_GUIDE.md)을 참고한다.
 
 ## DBeaver에서 Spark SQL 실행
 
-Thrift 연결의 초기 catalog는 `spark_catalog`다. Hive JDBC가 접속 시 여는 `default` namespace를 지원하기 위한 설정이며, Iceberg는 SQL에서 `lakehouse`를 명시해 사용한다. 기존 CLI/배치의 기본 catalog 설정은 변경하지 않는다.
+Thrift 연결의 기본 catalog는 `lakehouse`다. 단발 `iceberg-init` 서비스가 JDBC 세션 시작에 필요한 `lakehouse.default` namespace를 멱등하게 보장한 뒤 Thrift를 시작한다. 따라서 dbt-spark의 2-part 이름 `silver.events_clean`과 `silver_dbt.booking_events_clean`도 Lakehouse catalog에서 해석된다. 명시적인 `lakehouse.silver.*` 3-part 이름도 그대로 사용할 수 있다.
 
 `make thrift-up`으로 JDBC 접속용 `spark-thrift` 서비스를 실행한다. profile 없이 기본 Compose 기동에도 포함된다. 기존 Spark 이미지·Iceberg 설정을 재사용하지만 독립 JVM(`local[2]`, driver 1GB)이므로 추가 메모리가 필요하다. `make thrift-stop`으로 중지하고 `make thrift-logs`로 로그를 확인한다.
 
@@ -194,7 +197,7 @@ FROM lakehouse.silver.booking_events_clean LIMIT 100;
 
 서버가 Iceberg catalog의 metadata 위치를 조회하고 MinIO의 파일을 읽는다. DBeaver는 SQL 입력/결과 표시 도구이며 PostgreSQL catalog에 직접 연결하는 것과 다르다. Hive JDBC의 탐색기/자동완성에 테이블이 안 보이면 위와 같이 전체 이름을 지정해 조회한다. SQL 문법은 Spark SQL이며 Python 배치에서 만든 임시 view는 이 연결에 공유되지 않는다.
 
-Thrift의 기본 Hive metastore는 컨테이너 전용 `/tmp/shopslot-thrift-metastore`에 분리한다. CLI의 `/opt/spark/work-dir/metastore_db`와 공유하지 않아 두 서버의 Derby 잠금 충돌을 피한다. 이 임시 metastore에 영구 업무 테이블을 만들지 말고 `lakehouse.bronze.*`/`lakehouse.silver.*`처럼 Iceberg catalog를 명시한다. 실제 Iceberg catalog·데이터는 기존 PostgreSQL/MinIO 볼륨을 사용한다. TCP healthcheck는 포트 개방만 검사하므로 catalog/데이터 조회 성공까지 보장하지 않는다.
+Thrift의 Hive 호환용 embedded metastore는 컨테이너 전용 `/tmp/shopslot-thrift-metastore`에 분리한다. CLI의 `/opt/spark/work-dir/metastore_db`와 공유하지 않아 두 서버의 Derby 잠금 충돌을 피한다. 업무 테이블은 `lakehouse.bronze.*`/`lakehouse.silver.*`/`lakehouse.silver_dbt.*`처럼 Iceberg catalog에 저장하고, 실제 catalog·데이터는 PostgreSQL/MinIO 볼륨을 사용한다. TCP healthcheck는 포트 개방만 검사하므로 catalog/데이터 조회 성공까지 보장하지 않는다.
 
 ## Operations
 

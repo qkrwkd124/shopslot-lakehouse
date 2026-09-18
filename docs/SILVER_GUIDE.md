@@ -1,6 +1,6 @@
 # Silver 변환 명세
 
-2026-09-16. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 전용 `payment_events_clean`, 예약 상태 `bookings_current`, 결제 상태 `payments_current`를 구현했다. 현재 구현은 Spark SQL full-refresh 배치다. dbt 이관 및 증분 처리는 후속 계획이다.
+2026-09-16. 공통 논리 이벤트 경계 `lakehouse.silver.events_clean`, 예약 전용 `booking_events_clean`, 결제 전용 `payment_events_clean`, 예약 상태 `bookings_current`, 결제 상태 `payments_current`를 Spark SQL full-refresh 배치로 구현했다. 2026-09-18에는 예약 clean을 첫 dbt full-refresh 비교 모델로 이관해 기존 PySpark 결과와 일치함을 확인했다. 증분 처리와 나머지 모델 이관은 후속 계획이다.
 
 ## 실행과 저장
 
@@ -11,6 +11,7 @@ make silver-bookings-events # events_clean에서 예약 이벤트 clean을 재�
 make silver-bookings-current # clean 전체 snapshot을 읽어 예약별 현재 상태를 재작성 후 종료
 make silver-payment-events # events_clean에서 결제 이벤트 clean을 재작성
 make silver-payments-current # 결제 이벤트에서 결제별 현재 상태를 재작성 후 종료
+make dbt-booking-events     # 별도 silver_dbt에 예약 clean을 생성하고 PySpark 결과와 비교
 make iceberg-sql
 ```
 
@@ -35,6 +36,9 @@ make iceberg-sql
 13. `spark/jobs/silver_payments_current.py`: 입력 snapshot 고정, 결제 ID 중복·누락 검사와 Iceberg 저장을 담당하는 실행기.
 14. `spark/jobs/event_dq.py`: 각 clean 단계의 제외 이벤트를 공통 `event_dq` 테이블에 멱등하게 MERGE.
 15. `spark/sql/silver/merge_event_dq.sql`: dq_key 일치 여부에 따른 DQ 갱신·신규 저장 규칙.
+16. `dbt_shopslot/models/intermediate/booking/int_booking_events_validated.sql`: 기존 events_clean을 읽어 예약 이벤트를 타입화하고 검증 오류를 계산하는 ephemeral 중간 모델. 별도 테이블 없이 참조 모델의 CTE로 컴파일된다.
+17. `dbt_shopslot/models/silver/booking_events_clean.sql`: 중간 모델에서 오류가 없는 행만 저장하는 첫 dbt full-refresh 비교 모델.
+18. `dbt_shopslot/tests/`: 예약 계약과 기존 PySpark 결과 양방향 비교.
 
 `silver_bronze_input`, `silver_events_input`, `silver_event_candidates`, `silver_booking_event_candidates`, `silver_payment_event_candidates`와 각 `*_result`는 해당 SparkSession 안에서만 존재하는 임시 view다.
 
@@ -164,11 +168,11 @@ make silver-payment-events
 
 ### Full refresh → 증분 처리 비교 계획
 
-2026-09-14 기준 후속 개발 계획이다. 증분 처리와 아래 성능·장애 실험은 아직 구현·검증하지 않았다.
+PySpark와 dbt의 full-refresh 기준 결과는 확보했다. 증분 처리와 아래 성능·장애 실험은 아직 구현·검증하지 않았다.
 
 현재 `events_clean`은 고정한 Bronze snapshot 전체를, `booking_events_clean`은 고정한 events_clean snapshot 전체를 읽고 각 결과 테이블을 교체한다. snapshot은 직전 배치의 추가분이 아니라 해당 commit 이후 테이블 전체 상태를 나타낸다. 입력이 100건 → 300건 → 500건으로 늘면 매번 전체를 처리한다. 결과를 append하지 않으므로 누적 중복은 없지만 기존 입력을 다시 계산하는 비용은 발생한다.
 
-1. **기준 결과 확보:** `bookings_current`와 `payments_current`까지 full refresh SQL로 작성한다. 이벤트별 정보와 현재 상태 규칙을 먼저 확정하고 소규모 입력으로 검증한다.
+1. **기준 결과 확보(완료):** `bookings_current`와 `payments_current`까지 full refresh SQL로 작성하고, 첫 dbt `booking_events_clean`이 기존 PySpark 결과와 양방향으로 일치함을 검증했다. 예약 파싱·검증은 ephemeral 중간 모델로 분리했으며 컴파일 SQL에 CTE로 삽입되는 것도 확인했다.
 2. **증분 처리 설계:** 마지막 성공 입력 snapshot과 이번 종료 snapshot 사이의 추가 데이터를 읽는 방식을 설계한다. 현재 Bronze append-only 조건에서 출발하며 snapshot 만료·이력 단절 시 처리 정책도 정한다. snapshot ID는 숫자 크기로 순서를 비교하지 않는다.
 3. **모델별 반영:** clean은 기존 `event_id`와 비교해 중복을 막고 동일 ID의 payload 충돌을 다룬다. current는 영향을 받은 `booking_id`의 상태를 재구성하고 `MERGE` 등으로 반영한다. 생성 정보 보존과 늦은 이벤트를 고려해야 하므로 단순 append로 전환하지 않는다.
 4. **재실행 안전성:** 결과 쓰기 성공 뒤 진행 위치를 기록한다. 두 기록은 자동으로 하나의 트랜잭션이 되지 않으므로, 쓰기 성공 후 위치 기록 전에 실패해도 재처리가 중복을 만들지 않도록 설계한다. 실패 주입은 운영 데이터와 분리된 검증 환경에서 수행한다.
