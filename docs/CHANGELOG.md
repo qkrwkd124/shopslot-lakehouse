@@ -1,5 +1,12 @@
 # Change log
 
+## 2026-09-18 — 공개 README를 포트폴리오 소개 중심으로 재구성
+
+- 시간순 실행 기록과 세부 운영 메모가 앞에 나오던 README를 프로젝트 문제 정의, 전체 아키텍처, 핵심 설계, 데이터 계층, 검증 결과와 재현 방법 순서로 재구성했다.
+- PySpark 기준선과 dbt 단계적 이관, 현재 검증 범위와 아직 완료하지 않은 Gold·증분·다중 노드 범위를 구분해 구현하지 않은 기능을 성과처럼 보이지 않게 했다.
+- 진행 중인 프로젝트임을 README 상단에 명시하고, 현재 구조와 수치는 후속 실험에 따라 변경될 수 있는 기준선으로 표현했다.
+- 장문의 Spark·Silver·dbt·장애 설명은 각 전문 문서 링크로 연결하고 README에는 최초 실행, 주요 접속 지점과 저장소 구조만 남겼다. 실행 코드와 데이터 계약은 변경하지 않았다.
+
 ## 2026-09-18 — 첫 dbt Silver 비교 모델
 
 - 기존 `lakehouse.silver.events_clean`과 PySpark `booking_events_clean`을 dbt source로 등록하고, 예약 lifecycle 5종을 타입화·검증하는 `lakehouse.silver_dbt.booking_events_clean` full-refresh 모델을 추가했다.
