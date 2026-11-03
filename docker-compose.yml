@@ -212,6 +212,9 @@ services:
   dbt:
     build:
       context: ./dbt_shopslot
+    volumes:
+      - ./dbt_shopslot/logs:/opt/dbt/logs
+      - ./dbt_shopslot/target:/opt/dbt/target
     depends_on:
       spark-thrift:
         condition: service_healthy

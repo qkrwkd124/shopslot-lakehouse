@@ -50,6 +50,17 @@ make dbt-booking-events
 
 `dbt-debug`는 설정 파일, Git 의존성, adapter 로딩과 Thrift 접속을 확인하지만 변환 테이블을 생성하지 않는다. Spark Thrift가 꺼져 있으면 Compose가 의존 서비스와 함께 기동한다.
 
+## 로그와 실행 결과 보관
+
+Compose의 dbt 서비스는 다음 호스트 폴더를 컨테이너에 연결한다. `--rm`으로 단발 컨테이너가 삭제돼도 파일은 호스트에 남으며, 두 폴더는 기존 `.gitignore` 설정으로 Git에서 제외한다.
+
+| 호스트 경로 | 컨테이너 경로 | 내용 |
+| --- | --- | --- |
+| `dbt_shopslot/logs/` | `/opt/dbt/logs` | 상세 실행 로그 `dbt.log` |
+| `dbt_shopslot/target/` | `/opt/dbt/target` | `run_results.json`, `manifest.json`, 컴파일 SQL 등 |
+
+이 설정은 실행별 이력 보관 기능은 아니다. `target/`의 결과 파일은 후속 명령에서 덮어쓸 수 있고, `dbt clean`은 프로젝트의 `clean-targets`에 따라 연결된 호스트의 `logs/`와 `target/`도 삭제한다. 장기 이력이 필요하면 별도의 실행별 보관 단계를 추가한다.
+
 ## 첫 비교 모델
 
 `source('existing_silver', 'events_clean')`은 기존 `lakehouse.silver.events_clean`을 읽는다. `int_booking_events_validated`는 예약 lifecycle 5종을 선택하고 payload 타입 변환과 `validation_error` 계산을 담당한다. 이 모델의 `materialized='ephemeral'`은 별도 Iceberg relation을 생성하지 않는다. dbt는 이를 참조하는 `booking_events_clean`의 컴파일 SQL에 `__dbt__cte__int_booking_events_validated` CTE로 삽입한다. `booking_events_clean`은 이 CTE에서 오류가 없는 행만 골라 `lakehouse.silver_dbt.booking_events_clean`에 전체 교체 방식으로 저장한다.
