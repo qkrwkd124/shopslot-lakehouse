@@ -1,11 +1,11 @@
 COMPOSE := docker compose
 .DEFAULT_GOAL := up
 
-.PHONY: add-booking add-dq-fixture
+.PHONY: add-booking add-dq-fixture add-booking-dq-fixture
 .PHONY: up down reset migrate connector generate-p0 verify-p0 smoke logs ps api
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
-.PHONY: dbt-build dbt-version dbt-debug dbt-booking-events
+.PHONY: dbt-build dbt-version dbt-debug dbt-booking-events dbt-booking
 .PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
 .PHONY: silver-events-clean silver-bookings-events silver-bookings-current silver-payment-events silver-payments-current silver-payment-transactions
 
@@ -14,6 +14,9 @@ add-booking:
 
 add-dq-fixture:
 	$(COMPOSE) --profile tools run --build --rm generator python add_dq_fixture.py
+
+add-booking-dq-fixture:
+	$(COMPOSE) --profile tools run --build --rm generator python add_dq_fixture.py --domain booking
 
 thrift-up:
 	$(COMPOSE) up -d --build spark-thrift
@@ -34,7 +37,10 @@ dbt-debug:
 	$(COMPOSE) --profile tools run --rm dbt debug
 
 dbt-booking-events: dbt-build
-	$(COMPOSE) --profile tools run --rm dbt build --select booking_events_clean
+	$(COMPOSE) --profile tools run --rm dbt build --select +booking_events_clean +booking_event_dq
+
+dbt-booking: dbt-build
+	$(COMPOSE) --profile tools run --rm dbt build --selector booking
 
 silver-events-clean:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/silver_events_clean.py

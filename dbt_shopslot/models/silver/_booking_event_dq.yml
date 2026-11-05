@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: booking_event_dq
+    description: 예약 이벤트 검증에서 제외된 오류 행을 이벤트별로 보존한다.
+    columns:
+      - name: dq_key
+        data_tests:
+          - not_null
+          - unique
+      - name: validation_error
+        data_tests:
+          - not_null
+      - name: first_detected_at
+        description: 최초 발견 시각. MERGE 갱신 시 기존 값을 보존한다.
+      - name: last_detected_at
+        description: 마지막 발견 시각.

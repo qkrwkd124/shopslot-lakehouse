@@ -20,9 +20,10 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
-COPY dbt_project.yml profiles.yml ./
+COPY dbt_project.yml profiles.yml selectors.yml ./
 COPY models ./models
 COPY tests ./tests
+COPY macros ./macros
 
 ENTRYPOINT ["dbt"]
 CMD ["--version"]

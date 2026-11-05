@@ -1,5 +1,6 @@
 """Publish deterministic invalid booking and payment events for the DQ walkthrough."""
 
+import argparse
 import os
 from datetime import datetime
 
@@ -19,6 +20,14 @@ PAYMENT_TRANSACTION_ID = 9_000_000_001
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--domain",
+        choices=("all", "booking", "payment"),
+        default="all",
+        help="Select fixture domain (default: all).",
+    )
+    args = parser.parse_args()
     connection = pymysql.connect(
         host=os.environ.get("MYSQL_HOST", "localhost"),
         port=int(os.environ.get("MYSQL_PORT", "3306")),
@@ -37,7 +46,7 @@ def main() -> None:
             )
             existing = {row[0] for row in cursor.fetchall()}
 
-            if BOOKING_EVENT_ID not in existing:
+            if args.domain in ("all", "booking") and BOOKING_EVENT_ID not in existing:
                 cursor.execute("""
                     SELECT id, shop_id, customer_id, service_id, staff_id,
                            start_at, booked_price_krw
@@ -89,7 +98,7 @@ def main() -> None:
                     (BOOKING_EVENT_ID, "invalid_booking_created_fields")
                 )
 
-            if PAYMENT_EVENT_ID not in existing:
+            if args.domain in ("all", "payment") and PAYMENT_EVENT_ID not in existing:
                 cursor.execute("""
                     SELECT p.id, p.booking_id, b.shop_id,
                            p.request_amount_krw, p.payout_amount_krw,
@@ -162,7 +171,7 @@ def main() -> None:
                 )
             print("MySQL commit complete; Kafka/Bronze delivery is asynchronous.")
         else:
-            print("All DQ fixtures already exist; no event was added.")
+            print("Selected DQ fixtures already exist; no event was added.")
     finally:
         connection.close()
 

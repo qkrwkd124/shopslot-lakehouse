@@ -8,7 +8,7 @@
   )
 }}
 
--- ephemeral 중간 모델이 컴파일 시 CTE로 삽입된다. 이 모델은 정상 행만 저장한다.
+-- 검증 중간 테이블에서 정상 행만 선택해 저장한다.
 select
     event_id,
     event_type,

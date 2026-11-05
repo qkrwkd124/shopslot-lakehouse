@@ -1,5 +1,16 @@
 # Change log
 
+## 2026-11-05 — 예약 전용 DQ fixture 선택
+
+- 기존 DQ 생성기에 `--domain all|booking|payment` 옵션과 `make add-booking-dq-fixture`를 추가했다. 기본 실행은 기존처럼 예약·결제 오류를 모두 생성한다.
+- 예약 전용 실행은 Outbox에 음수 예약 가격 이벤트만 추가하며, 결정적 event_id를 재사용해 재실행 시 중복 생성하지 않는다. 기존 업무 행과 정상 P0 생성 계약은 변경하지 않는다.
+
+## 2026-11-05 — dbt 예약 도메인 DQ 모델 분리
+
+- 예약 검증 중간 모델을 Iceberg table로 저장하고 정상 모델과 예약 DQ 모델이 같은 결과를 읽도록 연결했다. 동일 파이프라인의 동시 실행은 피해야 한다.
+- 공통 오류 추출 매크로를 사용하는 `booking_event_dq` 증분 MERGE 모델을 추가했다. 키는 기존 Spark와 같은 `dq_key`이며 최초 발견 시각은 유지하고 마지막 발견 시각을 갱신한다. 기존 PySpark 공통 DQ 테이블과 분리된 `silver_dbt`에 저장한다.
+- `make dbt-booking-events`는 예약 중간 모델과 정상·DQ 모델 및 관련 테스트를 함께 선택한다. 신규 입력만 읽는 증분 경계와 입력 snapshot ID 보존은 아직 구현하지 않았다.
+
 ## 2026-11-03 — dbt 로그와 실행 결과 로컬 보존
 
 - dbt 서비스의 `logs/`와 `target/`을 호스트의 `dbt_shopslot/` 하위 폴더에 연결해 단발 컨테이너 삭제 후에도 실행 로그와 결과 파일을 보존한다.

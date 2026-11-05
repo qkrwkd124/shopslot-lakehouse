@@ -1,0 +1,7 @@
+selectors:
+  - name: booking
+    description: 예약 도메인의 모델 생성과 테스트
+    definition:
+      method: fqn
+      value: int_booking_events_validated
+      children: true

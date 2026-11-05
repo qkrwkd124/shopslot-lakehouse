@@ -1,7 +1,15 @@
-{{ config(materialized='ephemeral') }}
+{{
+  config(
+    materialized='table',
+    tblproperties={
+      'format-version': '2',
+      'write.format.default': 'parquet'
+    }
+  )
+}}
 
 -- 예약 이벤트를 타입화하고 검증 결과를 붙이는 내부 중간 모델이다.
--- ephemeral 모델이므로 Iceberg 테이블로 저장되지 않고 ref()한 모델의 CTE로 삽입된다.
+-- Iceberg 중간 테이블로 저장해 정상 모델과 예약 DQ 모델이 검증 결과를 공유한다.
 with booking_input as (
     select *
     from {{ source('existing_silver', 'events_clean') }}

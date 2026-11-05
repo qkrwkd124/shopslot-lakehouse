@@ -44,8 +44,8 @@ make dbt-version
 # 프로젝트 설정과 Spark Thrift 연결 확인
 make dbt-debug
 
-# booking_events_clean 생성과 전체 테스트 실행
-make dbt-booking-events
+# 예약 도메인 모델 생성과 관련 테스트 실행
+make dbt-booking
 ```
 
 `dbt-debug`는 설정 파일, Git 의존성, adapter 로딩과 Thrift 접속을 확인하지만 변환 테이블을 생성하지 않는다. Spark Thrift가 꺼져 있으면 Compose가 의존 서비스와 함께 기동한다.
@@ -61,20 +61,33 @@ Compose의 dbt 서비스는 다음 호스트 폴더를 컨테이너에 연결한
 
 이 설정은 실행별 이력 보관 기능은 아니다. `target/`의 결과 파일은 후속 명령에서 덮어쓸 수 있고, `dbt clean`은 프로젝트의 `clean-targets`에 따라 연결된 호스트의 `logs/`와 `target/`도 삭제한다. 장기 이력이 필요하면 별도의 실행별 보관 단계를 추가한다.
 
-## 첫 비교 모델
+## 예약 모델과 DQ 실행
 
-`source('existing_silver', 'events_clean')`은 기존 `lakehouse.silver.events_clean`을 읽는다. `int_booking_events_validated`는 예약 lifecycle 5종을 선택하고 payload 타입 변환과 `validation_error` 계산을 담당한다. 이 모델의 `materialized='ephemeral'`은 별도 Iceberg relation을 생성하지 않는다. dbt는 이를 참조하는 `booking_events_clean`의 컴파일 SQL에 `__dbt__cte__int_booking_events_validated` CTE로 삽입한다. `booking_events_clean`은 이 CTE에서 오류가 없는 행만 골라 `lakehouse.silver_dbt.booking_events_clean`에 전체 교체 방식으로 저장한다.
+`source('existing_silver', 'events_clean')`은 기존 PySpark `lakehouse.silver.events_clean`을 읽는다. 공통 검증과 event_id 중복 제거는 기존 PySpark에서 수행한다.
 
 ```text
 events_clean
-  -> int_booking_events_validated (ephemeral, 물리 테이블 없음)
-      -> booking_events_clean (Iceberg table)
+  -> int_booking_events_validated (Iceberg table)
+      -> booking_events_clean (정상 행, 전체 교체)
+      -> booking_event_dq (오류 행, 증분 MERGE)
 ```
 
-중간 모델을 분리한 목적은 이후 공통 `event_dq`가 같은 파싱·검증 규칙을 재사용하게 하는 것이다. 현재는 clean만 참조하므로 SQL을 구조적으로 분리한 단계이며 DQ 쓰기는 아직 dbt로 이관하지 않았다. ephemeral은 참조 모델마다 SQL이 삽입되므로 clean과 DQ가 각각 실행되면 원본을 각각 다시 읽는다. 동일 입력 결과를 물리적으로 한 번 고정해야 하는 단계에서는 우선 이 중간 모델을 table로 바꾼다. view는 현재 Iceberg JDBC Catalog의 view 지원을 활성화한 뒤 별도로 검토한다.
+중간 테이블에는 예약 이벤트의 파싱·타입 변환·오류 판정 결과를 저장한다. 두 하위 모델은 같은 검증 결과를 재사용한다. 같은 파이프라인을 동시에 실행해 중간 테이블을 교체하지 않도록 한다.
 
-`dbt build --select booking_events_clean`은 ephemeral 중간 모델을 최종 SQL에 포함하고, 저장 모델 생성 후 event_id not-null/unique, event_type 허용값, booking_id/shop_id not-null, 이벤트별 예약 계약과 기존 PySpark 결과 양방향 비교까지 8개 테스트를 실행한다. 중간 모델 분리 후에도 실제 실행 대상은 table 모델 1개이며 테스트 8개가 모두 통과했다. 기존 PySpark와 dbt 결과는 각각 20행으로 일치한다. `SHOW TABLES IN lakehouse.silver_dbt`에는 `booking_events_clean`만 있고 중간 모델은 없다. full refresh 재실행은 행을 누적하지 않고 새 Iceberg overwrite snapshot으로 같은 결과를 교체한다.
+`macros/event_dq_rows.sql`은 오류 행 선택과 공통 DQ 컬럼 구성을 재사용하는 SQL 매크로다. 예약 DQ 모델은 이 매크로에 예약 중간 모델과 검증 단계 이름을 전달한다. 향후 결제 DQ는 별도 모델·테이블로 추가해 예약 실행과 분리한다.
+
+`make dbt-booking`은 이미지를 빌드한 뒤 `selectors.yml`의 `booking` 범위를 `dbt build --selector booking`으로 실행한다. 예약 검증 중간 모델과 모든 하위 모델을 포함한다. 기존 `make dbt-booking-events`는 정상·DQ와 상위 모델을 명시적으로 선택한다. 공통 상위 모델은 한 번 생성하고 정상 모델의 기존 8개 테스트와 DQ 키 NULL·중복 및 오류 사유 NULL 테스트를 실행한다. 두 하위 모델 사이에는 선후 의존성이 없으며 실패한 테스트에 의존하는 후속 작업만 건너뛰는 기본 정책을 사용한다.
+
+결과 테이블은 `lakehouse.silver_dbt.booking_events_clean`과 `lakehouse.silver_dbt.booking_event_dq`다. 기존 `lakehouse.silver.event_dq`는 수정하지 않는다. DQ는 `dq_key`가 같으면 갱신하고 없으면 삽입하며 `first_detected_at`은 갱신에서 제외한다. 입력에서 사라진 오류도 DQ 이력에는 남는다. 정상 모델과 중간 모델은 매번 전체 교체한다.
+
+예약 DQ와 상위 모델만 실행하려면 이미지 빌드 후 다음 명령을 사용한다.
+
+```bash
+docker compose --profile tools run --rm dbt build --select +booking_event_dq
+```
+
+아직 DQ 입력은 매번 전체 중간 테이블을 검사한다. 신규 입력 경계, Spark DQ의 source_snapshot_id 보존, 빈 입력 보호, 해결된 오류 표시 정책은 후속 과제다. 이전 실험의 `silver_dbt.event_dq` 테이블이 존재해도 모델 이름 변경으로 자동 삭제되지는 않는다. 기존 모델의 20행 일치 및 테스트 8개 통과 기록은 이 변경 전 검증 이력이다.
 
 ## 다음 단계
 
-현재 모델은 `materialized='table'`인 full refresh다. 다음 단계에서는 이 결과를 기준선으로 Iceberg `MERGE` 기반 증분 처리, 동일 구간 재실행 멱등성, 늦게 도착한 이벤트와 실패 복구를 순서대로 검증한다. 공통 `events_clean`과 DQ 쓰기까지 dbt로 이관한 것은 아니다.
+예약 clean과 검증 중간 모델은 `materialized='table'`인 full refresh이며 예약 DQ는 incremental MERGE다. 다음 단계에서는 이 결과를 기준선으로 Iceberg `MERGE` 기반 증분 처리, 동일 구간 재실행 멱등성, 늦게 도착한 이벤트와 실패 복구를 순서대로 검증한다. 공통 `events_clean`과 공통·결제 DQ 쓰기는 아직 dbt로 이관하지 않았다.

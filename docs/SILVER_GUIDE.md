@@ -151,6 +151,8 @@ SELECT file_path, record_count FROM lakehouse.silver.booking_events_clean.files;
 
 ## event_dq 검증 fixture
 
+예약 dbt DQ만 검증하려면 `make add-booking-dq-fixture`로 예약 오류만 추가한다. 기존 fixture와 동일한 결정적 event_id를 사용하므로 이미 추가한 경우 중복 발행하지 않는다. 업무 예약 행은 수정하지 않고 Outbox에 음수 가격의 예약 생성 이벤트만 추가한다. Bronze 수집 뒤 `make silver-events-clean`으로 공통 입력을 갱신하고, dbt 예약 selector를 실행한다. dbt 결과는 `lakehouse.silver_dbt.booking_event_dq`에서 `invalid_booking_created_fields`로 확인한다. dbt를 재실행해도 이 오류의 행 수와 `first_detected_at`은 유지되고 `last_detected_at`은 갱신돼야 한다. 이 옵션 추가 시 실제 전송·dbt 실행은 별도로 수행해야 한다.
+
 정상 P0 결과에는 `validation_error`가 없으므로 선택형 fixture로 예약·결제 오류 이벤트를 각각 한 건 추가할 수 있다. 예약 fixture는 공통 envelope과 나머지 생성 필드는 유효하지만 `booked_price_krw=-1`이고, 결제 fixture는 공통 envelope과 결제 요약은 유효하지만 `amount_krw > request_amount_krw`다. 각각 결정적 event_id를 사용하므로 같은 환경에서 다시 실행해도 이미 존재하는 fixture는 추가하지 않는다.
 
 ```bash
