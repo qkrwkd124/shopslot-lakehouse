@@ -165,7 +165,7 @@ services:
         condition: service_completed_successfully
       iceberg-catalog-db:
         condition: service_healthy
-    environment:
+    environment: &spark-environment
       SPARK_NO_DAEMONIZE: "true"
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -179,6 +179,26 @@ services:
       - ./spark:/opt/spark/work-dir/spark:ro
       - spark-checkpoints:/opt/spark/checkpoints
     command: ["/bin/bash", "-lc", "tail -f /dev/null"]
+
+  bronze-shops:
+    <<: *spark-runtime
+    profiles: ["tools"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      iceberg-catalog-db:
+        condition: service_healthy
+    environment:
+      <<: *spark-environment
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-shopslot}
+      MYSQL_USER: ${MYSQL_USER:-shopslot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-shopslot}
+    ports: []
+    volumes:
+      - ./spark:/opt/spark/work-dir/spark:ro
+    command: ["python3", "/opt/spark/work-dir/spark/run.py", "submit", "/opt/spark/work-dir/spark/jobs/bronze_shops.py"]
 
   iceberg-init:
     <<: *spark-runtime

@@ -1,5 +1,25 @@
 # Spark Bronze 기술 가이드
 
+## MySQL 매장 목록 배치
+
+`make bronze-shops`는 Spark 배치를 한 번 실행한다. Spark는 MySQL의 `shops`를 JDBC로 읽어 `lakehouse.bronze.shops`에 매장당 한 행을 저장한다. 원천 컬럼을 유지하고 적재 시각 `bronze_ingested_at`을 추가한다. 매장 등록 시각인 `created_at`은 그대로 보관한다.
+
+매번 MySQL의 전체 매장 목록으로 테이블을 교체한다. 같은 데이터로 재실행해도 매장 행이 늘어나지 않으며, 원천에서 빠진 행은 다음 성공한 적재 결과에서도 빠진다. P0 매장 데이터가 필요하면 먼저 `make generate-p0`로 생성한다.
+
+```bash
+make bronze-shops
+make iceberg-up
+make iceberg-sql
+```
+
+```sql
+SELECT id, shop_name, region, is_active, created_at, updated_at, bronze_ingested_at
+FROM lakehouse.bronze.shops
+ORDER BY id;
+```
+
+아래 절은 Kafka 예약 이벤트 스트리밍 적재를 설명한다.
+
 기준: 2026-09-10, Spark 3.5.6 / Iceberg 1.11.0. 구현 근거는 `spark/jobs/bronze_stream.py`와 `spark/conf/spark-defaults.conf`다. 현재 구현의 실행 흐름, 설정, 검증 범위와 운영 제약을 설명한다.
 
 ## 1. 역할부터 구분하기

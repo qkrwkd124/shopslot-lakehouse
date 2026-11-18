@@ -6,7 +6,7 @@ COMPOSE := docker compose
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
 .PHONY: dbt-build dbt-version dbt-debug dbt-booking-events dbt-booking
-.PHONY: bronze-once bronze-up bronze-stop bronze-logs verify-bronze
+.PHONY: bronze-once bronze-up bronze-stop bronze-logs bronze-shops verify-bronze
 .PHONY: silver-events-clean silver-bookings-events silver-bookings-current silver-payment-events silver-payments-current silver-payment-transactions
 
 add-booking:
@@ -62,6 +62,9 @@ silver-payment-transactions:
 
 bronze-once:
 	$(COMPOSE) exec -T spark python3 /opt/spark/work-dir/spark/run.py submit /opt/spark/work-dir/spark/jobs/bronze_stream.py --available-now
+
+bronze-shops:
+	$(COMPOSE) --profile tools run --build --rm bronze-shops
 
 bronze-up:
 	$(COMPOSE) --profile streaming up -d --build bronze

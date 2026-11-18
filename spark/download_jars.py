@@ -7,6 +7,7 @@ ARTIFACTS = (
     ("org/apache/iceberg", "iceberg-spark-runtime-3.5_2.12", "1.11.0"),
     ("org/apache/iceberg", "iceberg-aws-bundle", "1.11.0"),
     ("org/postgresql", "postgresql", "42.7.7"),
+    ("com/mysql", "mysql-connector-j", "8.4.0"),
     # Compile dependencies from Spark 3.5.6's Kafka connector POM.
     # Spark already provides slf4j, lz4, snappy, jsr305 and spark-tags.
     ("org/apache/spark", "spark-sql-kafka-0-10_2.12", "3.5.6"),

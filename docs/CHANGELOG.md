@@ -1,5 +1,10 @@
 # Change log
 
+## 미출시 — 매장 원본 Bronze 배치 적재
+
+- `make bronze-shops`로 MySQL `shops` 전체를 Spark JDBC로 읽고 `lakehouse.bronze.shops`를 교체한다. 원천 컬럼에 Bronze 적재 시각만 추가한다.
+- 로컬에서 배치를 두 번 실행한 뒤 Bronze 3행, 고유 매장 ID 3개, MySQL 원본 3행을 확인했다.
+
 ## 2026-11-05 — 예약 전용 DQ fixture 선택
 
 - 기존 DQ 생성기에 `--domain all|booking|payment` 옵션과 `make add-booking-dq-fixture`를 추가했다. 기본 실행은 기존처럼 예약·결제 오류를 모두 생성한다.
