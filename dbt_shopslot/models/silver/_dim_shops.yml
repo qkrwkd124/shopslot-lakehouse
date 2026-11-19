@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: dim_shops
+    description: 매장 정보 테이블.
+    columns:
+      - name: shop_id
+        description: 매장 식별자.
+        data_tests:
+          - not_null
+          - unique
+      - name: shop_name
+        description: 매장 이름.
+        data_tests:
+          - not_null

@@ -9,3 +9,10 @@ sources:
         description: 공통 envelope 검증과 event_id 중복 제거를 마친 논리 이벤트 경계.
       - name: booking_events_clean
         description: dbt 모델과 결과를 비교할 기존 PySpark 예약 이벤트 clean 테이블.
+
+  - name: bronze
+    description: bronze 테이블
+    schema: bronze
+    tables:
+      - name: shops
+        description: 매장 정보 테이블.
