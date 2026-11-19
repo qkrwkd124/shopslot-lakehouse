@@ -7,7 +7,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,7 @@ SEED_NAMESPACE = uuid.UUID("7a6f8a42-b6d8-4dd7-91e5-3aa5e65f8e51")
 KST = ZoneInfo("Asia/Seoul")
 BOOKED_PRICE_KRW = 55_000
 BOOKING_COUNT = 10
+FIRST_SHOP_OPENED_ON = date(2026, 9, 1)
 
 RESCHEDULED_INDEX = 9
 CANCELLED_INDEX = 7
@@ -167,13 +168,14 @@ def seed_reference_data(connection: pymysql.connections.Connection) -> None:
     with transaction(connection) as cursor:
         for index in range(1, 4):
             shop_id = index
+            opened_on = FIRST_SHOP_OPENED_ON + timedelta(days=index - 1)
             cursor.execute(
                 """
-                INSERT INTO shops (id, shop_name, region)
-                VALUES (%s, %s, 'seoul')
+                INSERT INTO shops (id, shop_name, region, opened_on)
+                VALUES (%s, %s, 'seoul', %s)
                 ON DUPLICATE KEY UPDATE shop_name = VALUES(shop_name)
                 """,
-                (shop_id, f"ShopSlot {index:03d}"),
+                (shop_id, f"ShopSlot {index:03d}", opened_on),
             )
             cursor.execute(
                 """

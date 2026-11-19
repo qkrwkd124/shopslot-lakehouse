@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -22,10 +23,18 @@ from app.db.base import Base, BaseModel
 
 class Shop(BaseModel):
     __tablename__ = "shops"
+    __table_args__ = (
+        CheckConstraint(
+            "closed_on >= opened_on",
+            name="operating_dates",
+        ),
+    )
 
     shop_name: Mapped[str] = mapped_column(String(100))
     region: Mapped[str] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("1"))
+    opened_on: Mapped[date | None] = mapped_column(Date)
+    closed_on: Mapped[date | None] = mapped_column(Date)
 
     services: Mapped[list[Service]] = relationship(back_populates="shop")
     staffs: Mapped[list[Staff]] = relationship(back_populates="shop")
