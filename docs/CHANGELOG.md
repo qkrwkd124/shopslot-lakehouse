@@ -1,5 +1,11 @@
 # Change log
 
+## 미출시 — 매장 영업일 원천 컬럼 추가
+
+- MySQL `shops`에 `opened_on`(영업 시작일)과 `closed_on`(마지막 영업일)을 `DATE`로 추가했다. 기존 행의 미확인 날짜는 `NULL`로 유지하며, 두 날짜가 모두 있으면 폐업일이 오픈일보다 앞설 수 없다.
+- `make generate-p0`로 새 P0 매장을 만들면 2026년 9월 1~3일의 오픈일을 설정한다.
+- `make refresh-shops`로 매장 Bronze 적재와 Silver `dim_shops` 생성·테스트를 순서대로 실행한다.
+
 ## 미출시 — 매장 원본 Bronze 배치 적재
 
 - `make bronze-shops`로 MySQL `shops` 전체를 Spark JDBC로 읽고 `lakehouse.bronze.shops`를 교체한다. 원천 컬럼에 Bronze 적재 시각만 추가한다.

@@ -5,7 +5,7 @@ COMPOSE := docker compose
 .PHONY: up down reset migrate connector generate-p0 verify-p0 smoke logs ps api
 .PHONY: iceberg-up iceberg-demo iceberg-sql
 .PHONY: thrift-up thrift-stop thrift-logs
-.PHONY: dbt-build dbt-version dbt-debug dbt-booking-events dbt-booking
+.PHONY: dbt-build dbt-version dbt-debug dbt-booking-events dbt-booking dbt-shops refresh-shops
 .PHONY: bronze-once bronze-up bronze-stop bronze-logs bronze-shops verify-bronze
 .PHONY: silver-events-clean silver-bookings-events silver-bookings-current silver-payment-events silver-payments-current silver-payment-transactions
 
@@ -29,6 +29,12 @@ thrift-logs:
 
 dbt-build:
 	$(COMPOSE) --profile tools build dbt
+
+dbt-shops: dbt-build
+	$(COMPOSE) --profile tools run --rm dbt build --select dim_shops
+
+refresh-shops: bronze-shops
+	$(MAKE) dbt-shops
 
 dbt-version:
 	$(COMPOSE) --profile tools run --rm dbt --version

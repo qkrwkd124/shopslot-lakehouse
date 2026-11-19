@@ -2,9 +2,13 @@
 
 ## MySQL 매장 목록 배치
 
-`make bronze-shops`는 Spark 배치를 한 번 실행한다. Spark는 MySQL의 `shops`를 JDBC로 읽어 `lakehouse.bronze.shops`에 매장당 한 행을 저장한다. 원천 컬럼을 유지하고 적재 시각 `bronze_ingested_at`을 추가한다. 매장 등록 시각인 `created_at`은 그대로 보관한다.
+`make bronze-shops`는 Spark 배치를 한 번 실행한다. Spark는 MySQL의 `shops`를 JDBC로 읽어 `lakehouse.bronze.shops`에 매장당 한 행을 저장한다. 매장 등록 시각 `created_at`, 영업 시작일 `opened_on`, 마지막 영업일 `closed_on` 등 원천 컬럼을 유지하고 적재 시각 `bronze_ingested_at`을 추가한다. 날짜가 둘 다 있으면 `closed_on`은 `opened_on` 당일 또는 이후여야 한다.
 
 매번 MySQL의 전체 매장 목록으로 테이블을 교체한다. 같은 데이터로 재실행해도 매장 행이 늘어나지 않으며, 원천에서 빠진 행은 다음 성공한 적재 결과에서도 빠진다. P0 매장 데이터가 필요하면 먼저 `make generate-p0`로 생성한다.
+
+새 P0 매장의 오픈일은 `make generate-p0`에서 설정한다. 이미 생성한 매장의 미확인 날짜는 MySQL에 `NULL`로 남는다. 실제 날짜를 확인할 수 있으면 원천 `shops`를 갱신한 뒤 매장 적재를 실행한다.
+
+`make refresh-shops`는 매장 Bronze 적재가 성공한 뒤 `lakehouse.silver_dbt.dim_shops`를 생성하고 관련 dbt 테스트를 실행한다. 이미 적재된 Bronze로 Silver만 다시 만들려면 `make dbt-shops`를 실행한다.
 
 ```bash
 make bronze-shops
@@ -13,7 +17,7 @@ make iceberg-sql
 ```
 
 ```sql
-SELECT id, shop_name, region, is_active, created_at, updated_at, bronze_ingested_at
+SELECT id, shop_name, opened_on, closed_on, created_at, bronze_ingested_at
 FROM lakehouse.bronze.shops
 ORDER BY id;
 ```
