@@ -2,6 +2,35 @@
 
 재현 가능한 증상, 근본 원인, 해결 방법, 검증 결과를 기록한다. 같은 문제를 다시 만났을 때 임시 우회 대신 안전한 해결책을 선택하는 기준이다.
 
+## Bronze 재개 시 Kafka 오프셋을 읽을 수 없음 (2026-11)
+
+### 증상과 원인
+
+Spark가 `booking.events.v1`의 파티션 0에서 오프셋 `40`을 읽다가 `OffsetOutOfRangeException`으로 멈췄다. Bronze의 마지막 오프셋은 `39`였고, 실패 당시 Redpanda의 시작 오프셋은 `41`, high watermark는 `43`이었다. 따라서 당시 읽을 수 있는 범위는 `41~42`였다.
+
+토픽에는 `cleanup.policy=delete`와 `retention.ms=604800000`(7일)이 적용돼 있었다. 보존 기간 만료가 유력하지만 `40`을 포함한 세그먼트의 삭제 기록은 찾지 못했다. `redpanda/controller` 경로의 삭제 로그는 브로커 내부 로그이고, `raft` 로그에 표시되는 내부 오프셋은 Spark가 요청하는 Kafka 오프셋과 직접 비교할 수 없다. 실패를 확인하는 데는 예약 토픽의 `fetch offset_out_of_range` 줄이 가장 직접적인 증거였다.
+
+### 조사와 복구
+
+1. `docker compose exec -T redpanda rpk topic describe booking.events.v1 -p`로 파티션별 `LOG-START-OFFSET`을 확인했다. Spark의 체크포인트에서는 마지막 완료 배치의 **종료 경계**가 `40`이었으므로, 다음 읽기 위치가 `40`이었다.
+2. MySQL `outbox_events`의 `event_id` 목록을 Spark에서 `LEFT ANTI JOIN`으로 Bronze와 대조했다. Bronze는 `get_json_object(payload, '$.event_id')`로 ID를 읽었다. Outbox 43건 중 Bronze에 없는 건은 세 건이었고, 처음 대조할 때 두 건은 Kafka의 `41`, `42`에 남아 있었다.
+3. Outbox에만 남은 `1113f1fb…` 한 건을 오프셋 `40`의 이벤트로 추정했다. Outbox에는 Kafka 오프셋이 없으므로 원래 위치를 직접 확인한 것은 아니다. 같은 `event_id`와 업무 시각을 담은 원문을 재발행하자 Kafka가 새 오프셋 `43`을 부여했다. 원래 Kafka 위치와 기록 시각은 복원되지 않았다.
+4. Console의 파티션 0에서 `41~43`의 이벤트 ID가 Bronze에 없던 세 건과 일치하는지 확인했다. 기존 Bronze 범위와 현재 Kafka 범위가 겹치지 않는 것을 확인한 뒤, Bronze writer를 멈추고 기존 체크포인트인 `/opt/spark/checkpoints/booking-events-v1`을 백업했다. 새 체크포인트로 시작하면 `startingOffsets=earliest`가 적용돼 Kafka에 남은 첫 위치부터 읽는다. `bronze-once`와 `bronze-up` 중 하나만 실행한다. `failOnDataLoss=true`는 유지했다.
+
+### 검증과 재발 방지
+
+복구 뒤 Bronze에서 `41~43` 세 건의 적재를 확인했다. 검증 기준은 오프셋 `40`을 다시 만드는 것이 아니라, 빠졌던 **세 `event_id`가 Bronze에 들어왔는지** 확인하는 것이다. 재발행한 이벤트의 `kafka_timestamp`는 Kafka에 다시 기록된 시각이며, 업무 집계에는 본문의 `event_time`을 사용한다.
+
+운영에서는 Kafka의 파티션별 보존 시작 위치와 Spark의 다음 읽기 위치를 감시한다. 보존 기간은 예상 중단 시간보다 길게 잡고, 장애 시에는 조사 범위를 고정한 뒤 ID를 일괄 대조한다.
+
+## `make bronze-up` 실행 시 Docker `network … not found` (2026-11)
+
+체크포인트 복구 후 `make bronze-up`에서 Docker가 네트워크를 찾을 수 없다고 응답했다. 오류가 가리킨 ID는 `df425acf2234…`였고, 현재 `shopslot-lakehouse_default`의 ID는 `98b8c19bfa5c…`였다. 이 오류는 Spark가 Kafka를 읽기 전에 발생했다.
+
+비슷한 상황에서는 `docker compose --profile streaming ps -a bronze`로 컨테이너를 찾고, `docker inspect --format '{{json .NetworkSettings.Networks}}' <컨테이너명>`의 `NetworkID`를 현재 네트워크 ID와 대조한다. `bronze`만 이전 네트워크를 참조하는 것으로 확인되면 그 컨테이너만 재생성한다. 데이터 볼륨과 Spark 체크포인트는 보존한다.
+
+사용자가 시작 오류를 해결하고 Bronze 적재를 확인했다. 실제로 어떤 명령으로 Docker 오류를 해소했는지는 확인하지 않았다.
+
 ## dbt-spark에서 별도 Iceberg catalog 지정 실패 (2026-09-18)
 
 ### 증상
