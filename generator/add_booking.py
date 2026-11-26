@@ -1,8 +1,9 @@
 """Append one new booking and its outbox event; never rerun or reset P0."""
 
+import argparse
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pymysql
 
@@ -16,6 +17,17 @@ from produce_p0_events import (
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--event-date",
+        type=date.fromisoformat,
+        help="Set the booking event date (YYYY-MM-DD) at 10:00 Korea time.",
+    )
+    args = parser.parse_args()
+    event_time = datetime.now(KST)
+    if args.event_date is not None:
+        event_time = datetime.combine(args.event_date, time(10), tzinfo=KST)
+
     connection = pymysql.connect(
         host=os.environ.get("MYSQL_HOST", "localhost"),
         port=int(os.environ.get("MYSQL_PORT", "3306")),
@@ -48,7 +60,6 @@ def main() -> None:
 
             shop_id, service_id, staff_id, price = reference
             customer_id = customer[0]
-            event_time = datetime.now(KST)
             start_at = event_time + timedelta(days=1)
             event_id = str(uuid.uuid4())
 
