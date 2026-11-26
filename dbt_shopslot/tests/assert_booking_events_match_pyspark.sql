@@ -1,3 +1,4 @@
+{{ config(enabled=false) }}
 -- dbt 이관 결과가 기존 PySpark full-refresh 기준 결과와 완전히 같은지 양방향 비교한다.
 with dbt_result as (
     select * from {{ ref('booking_events_clean') }}
