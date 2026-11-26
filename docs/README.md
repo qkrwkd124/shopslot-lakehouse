@@ -3,6 +3,7 @@
 
 - [Spark Bronze 가이드](SPARK_GUIDE.md): Kafka 수집, trigger, checkpoint, Iceberg commit과 저장 구조
 - [Silver 변환 명세](SILVER_GUIDE.md): 이벤트 계약 검증, 중복 제거, full refresh와 증분 전환 계획
+- [Gold 가이드](GOLD_GUIDE.md)에서 매장별 일일 예약 집계의 요구사항과 확인 예시를 볼 수 있다.
 - [dbt 실행 환경](DBT_GUIDE.md): 단발 컨테이너, Spark Thrift 연결, 파일 역할과 실행 순서
 - [변경 기록](CHANGELOG.md): 기능·계약·운영 변경과 검증 결과
 - [설계 의사결정](DESIGN_DECISIONS.md): 요구사항, 대안, 선택 이유와 남은 결정
